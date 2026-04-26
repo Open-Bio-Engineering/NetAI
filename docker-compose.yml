@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  netai:
+    build: .
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./inference_cache:/app/inference_cache
+    environment:
+      - NETAI_NODE_ID=netai-node-1
+      - NETAI_PORT=8001
+      - NETAI_LOG_LEVEL=info
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+        reservations:
+          devices:
+            - capabilities: [gpu]
+              count: all
+              driver: nvidia
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  netai-worker:
+    build: .
+    command: ["uvicorn", "netai.api.app:create_app", "--host", "0.0.0.0", "--port", "8001", "--factory"]
+    volumes:
+      - ./checkpoints:/app/checkpoints
+      - ./inference_cache:/app/inference_cache
+    environment:
+      - NETAI_NODE_ID=netai-worker-1
+      - NETAI_PORT=8001
+      - NETAI_BOOTSTRAP=http://netai:8001
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+    depends_on:
+      netai:
+        condition: service_healthy
+    restart: unless-stopped
