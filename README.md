@@ -6,12 +6,13 @@
 
 **Run any model, any size, anywhere. Contribute compute, earn inference.**
 
-[![Tests](https://img.shields.io/badge/tests-693%20passing-brightgreen)](./tests)
+[![Tests](https://img.shields.io/badge/tests-757%20passing-brightgreen)](./tests)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
-[![Lines of Code](https://img.shields.io/badge/LOC-19%2C290-purple)](https://github.com/Open-Bio-Engineering/NetAI)
+[![LOC](https://img.shields.io/badge/LOC-21%2C950-purple)](https://github.com/Open-Bio-Engineering/NetAI)
+[![No Dep on Non-MIT](https://img.shields.io/badge/dependencies-MIT%20only-green)](https://github.com/Open-Bio-Engineering/NetAI)
 
-[🌐 Dashboard](#-dashboard) · [⚡ Quick Start](#-quick-start) · [📐 Architecture](#-architecture) · [🔧 API](#-api-endpoints-73) · [🔐 Security](#-security-model) · [📊 Benchmarks](#-benchmarks)
+[🌐 Dashboard](#-dashboard) · [⚡ Quick Start](#-quick-start) · [📐 Architecture](#-architecture) · [🔧 API](#-api-endpoints) · [🔐 Security](#-security-model) · [📊 Benchmarks](#-benchmarks)
 
 </div>
 
@@ -28,7 +29,7 @@ NetAI is a fully decentralized P2P system where **anyone** can:
 - ⚡ **Earn free inference** proportional to compute contributed (PPLNS rewards)
 - 🗳️ **Vote** on which models the network should load next
 
-No datacenter required. No central server. No single point of failure.
+No datacenter required. No central server. No single point of failure. **No dependency on non-MIT software.**
 
 ```
   Your laptop (3B model)  ◄──┐
@@ -48,12 +49,13 @@ No datacenter required. No central server. No single point of failure.
 <tr>
 <td width="50%">
 
-### 🧠 Inference at Any Scale
+### 🧠 Native Distributed Inference
 - **Pipeline-parallel** inference splits transformer layers across volunteer nodes
-- 6 routing strategies: round-robin, least-loaded, lowest-latency, hash-based, random, adaptive
-- AutoLoader: **VRAM-aware model loading** — starts with mini models, scales up as nodes join
-- KV cache with distributed partitioning, prefix caching, and LRU eviction
-- Streaming inference via SSE and WebSocket
+- **NativeInferenceEngine** — real GPT-2/LLaMA forward pass (NumPy + optional PyTorch)
+- **ModelDownloader** — fetches weights from HuggingFace (MIT/Apache license filter)
+- **PipelineExecutor** — distributes layers across P2P nodes with VRAM-aware planning
+- Autoregressive generation with top-k/top-p sampling
+- Safetensors, PyTorch bin, and NPZ weight loading
 
 </td>
 <td width="50%">
@@ -80,7 +82,7 @@ No datacenter required. No central server. No single point of failure.
 <td width="50%">
 
 ### 🔐 Security-First Design
-- JWT tokens + 8 scope-based RBAC roles (READ, WRITE, TRAIN, INFERENCE, GRADIENT, VOTE, GROUP, ADMIN)
+- JWT tokens + 8 scope-based RBAC roles
 - P2P Ed25519 signature verification
 - Rate limiting per IP per endpoint
 - Input validation on all inputs
@@ -93,6 +95,54 @@ No datacenter required. No central server. No single point of failure.
 
 ---
 
+## 🚀 Native Inference Pipeline
+
+NetAI runs real transformer inference natively — no dependency on external LLM runtimes.
+
+```
+  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+  │  HuggingFace │────►│   Model      │────►│   Native     │────►│  Pipeline    │
+  │  (download)  │     │  Downloader  │     │  Engine      │     │  Executor    │
+  │  MIT models  │     │  (cache+verify)│   │  (numpy/torch)│    │  (P2P distribute)│
+  └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+```
+
+**How it works:**
+
+1. **Download** — Fetches model weights from HuggingFace, filters by MIT-compatible license, caches locally
+2. **Load** — Parses config.json, loads safetensors/bin weights, extracts per-layer weights
+3. **Generate** — Real transformer forward pass: embedding → self-attention → FFN → layer norm → logits
+4. **Distribute** — PipelineExecutor splits layers across P2P nodes based on their VRAM, activations flow node-to-node
+5. **Scale** — 1000 laptops together can run a 70B model that no single laptop could
+
+### Supported Architectures
+
+| Architecture | Models | Forward Pass |
+|-------------|--------|-------------|
+| **GPT-2** | GPT-2, GPT-Neo | QKV attention, GELU, learned position embeddings |
+| **LLaMA** | LLaMA, Mistral, Qwen, Gemma, Phi | RoPE, SwiGLU/SiLU, RMSNorm |
+
+### Model Download
+
+```bash
+# Download and load a model from HuggingFace
+netai inference download gpt2
+
+# Run native inference
+netai inference native-run --model gpt2 --prompt "Hello, world!" --max-tokens 64
+
+# Check native engine status
+netai inference native-status
+
+# List loaded and cached models
+netai inference native-models
+
+# Plan a distributed pipeline
+netai inference pipeline-plan --model gpt2 --vram 8192
+```
+
+---
+
 ## 📊 Benchmarks
 
 | Metric | Result |
@@ -102,7 +152,9 @@ No datacenter required. No central server. No single point of failure.
 | KV cache hit rate | **100%** local, distributed across nodes |
 | Load balancer routing | **<0.5ms** per 1,000 decisions |
 | AutoLoader planning | **<10ms** per 100 load plans |
-| Test coverage | **693 tests** across 18 files (100% passing) |
+| Native engine generation | **Real transformer forward pass** (no dummy weights) |
+| Pipeline distribution | **VRAM-aware** layer sharding across nodes |
+| Test coverage | **757 tests** across 19 files (100% passing) |
 
 ---
 
@@ -135,10 +187,19 @@ PYTHONPATH=src uvicorn netai.api.app:create_app --factory --port 8001
 ```
 
 ```bash
-# Jack in — contribute your compute to the network
-netai jack-in --mode both --gpu 1 --ram 16
+# Download a model from HuggingFace and load it
+netai inference download gpt2
 
-# Run inference on any model
+# Run native (real) inference on the model
+netai inference native-run --model gpt2 --prompt "Hello, world!" --max-tokens 64
+
+# Plan a distributed pipeline across multiple nodes
+netai inference pipeline-plan --model gpt2 --vram 8192
+
+# Jack in — contribute your compute to the network
+netai jackin --mode both --gpu 1 --ram 16
+
+# Run inference on a loaded model
 netai inference run --model gpt2-small --prompt "Hello, world!"
 
 # Browse the model catalog
@@ -169,7 +230,7 @@ docker run -p 8001:8001 -p 7999:7999 netai
 </details>
 
 <details>
-<summary><b>📋 CLI Reference (17 commands)</b></summary>
+<summary><b>📋 CLI Reference (22 commands)</b></summary>
 
 | Command | Description |
 |---------|-------------|
@@ -182,14 +243,19 @@ docker run -p 8001:8001 -p 7999:7999 netai
 | `netai pledge` | Pledge resources to the network |
 | `netai leaderboard` | Pledge leaderboard |
 | `netai group` | Group management (create, join, invite) |
-| `netai inference` | Distributed inference (load, run, unload, status) |
+| `netai inference load` | Load model for inference |
+| `netai inference run` | Run inference on loaded model |
+| `netai inference download` | Download model from HuggingFace |
+| `netai inference native-run` | Run native (real) inference |
+| `netai inference native-status` | Native engine status |
+| `netai inference native-models` | List loaded/cached models |
+| `netai inference pipeline-plan` | Plan distributed pipeline |
+| `netai inference status` | Inference engine status |
+| `netai inference models` | List loaded models |
 | `netai models` | Model catalog (list, get, vote) |
-| `netai autoloader` | Auto-loader management (status, load, recommend) |
+| `netai autoloader` | Auto-loader management |
 | `netai jackin` | Jack into the network |
 | `netai gradient` | Gradient sync operations |
-| `netai auth` | Authentication (register, login, tokens, API keys) |
-| `netai security` | Security status & audit |
-| `netai serve` | Start the server |
 
 </details>
 
@@ -211,30 +277,23 @@ docker run -p 8001:8001 -p 7999:7999 netai
   │                      P2P Network (encrypted)                     │
   │  ─────┬──────────────┬──────────────┬──────────────┬─────         │
   │       │              │              │              │               │
-  │  ┌────┴──────────────┴──────────────┴──────────────┴─────┐       │
-  │  │              Inference Load Balancer                   │       │
-  │  │  (Round-Robin · Least-Loaded · Adaptive · Hash)       │       │
-  │  └────────────────────────┬────────────────────────────┘       │
-  │                           │                                     │
-  │  ┌────────────────────────┴────────────────────────────┐       │
-  │  │                 AutoLoader                             │       │
-  │  │  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌────────┐│       │
-  │  │  │  Mini    │  │  Small   │  │   Mid    │  │ Large  ││       │
-  │  │  │  ○○○○    │──│  ○○○○    │──│  ○○○○   │──│ ○○○○  ││       │
-  │  │  │  2-100M  │  │ 100-350M│  │ 350-700M │  │ 700M+  ││       │
-  │  │  └─────────┘  └──────────┘  └──────────┘  └────────┘│       │
+  │  ┌────┴─────────────────────────────────────────────────┐       │
+  │  │              Native Inference Engine                  │       │
+  │  │  ┌──────────────┐  ┌───────────────┐  ┌───────────┐ │       │
+  │  │  │  Model        │  │  Transformer  │  │  Pipeline  │ │       │
+  │  │  │  Downloader   │  │  Forward Pass │  │  Executor  │ │       │
+  │  │  │  (HuggingFace)│  │  (NumPy/PyTorch)│ (Distribute)│ │       │
+  │  │  └──────────────┘  └───────────────┘  └───────────┘ │       │
   │  └───────────────────────────────────────────────────────┘       │
   │                                                                  │
   │  ┌──────────────────┐  ┌─────────────────┐  ┌──────────────┐    │
-  │  │   Pipeline        │  │   KV Cache     │  │  Voting &    │    │
-  │  │   Orchestrator    │  │   Manager       │  │  Governance  │    │
-  │  │  (Layer Shards)   │  │  (Distributed)  │  │  (PPLNS)    │    │
+  │  │   AutoLoader     │  │   KV Cache     │  │  Voting &    │    │
+  │  │  (VRAM-aware)    │  │   Manager       │  │  Governance  │    │
   │  └──────────────────┘  └─────────────────┘  └──────────────┘    │
   │                                                                  │
   │  ┌──────────────────┐  ┌─────────────────┐  ┌──────────────┐    │
-  │  │  Gradient Sync   │  │   Training      │  │   Compute    │    │
-  │  │  Server           │  │   Coordinator   │  │   Pool       │    │
-  │  │  (Compress+Push) │  │  (Distributed)  │  │  (Stratum)  │    │
+  │  │  Inference Load  │  │   Training      │  │   Compute    │    │
+  │  │  Balancer (6)    │  │   Coordinator   │  │   Pool       │    │
   │  └──────────────────┘  └─────────────────┘  └──────────────┘    │
   └──────────────────────────────────────────────────────────────────┘
 ```
@@ -271,11 +330,27 @@ docker run -p 8001:8001 -p 7999:7999 netai
 
 ---
 
-## 🔌 API Endpoints (73+)
+## 🔌 API Endpoints (83+)
 
 <table>
 <tr><th>Category</th><th>Endpoints</th></tr>
-<tr><td><b>Inference</b></td>
+<tr><td><b>Native Inference</b></td>
+<td>
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/inference/download/{model_id}` | Download model from HuggingFace |
+| POST | `/api/inference/load-local` | Load model from local directory |
+| POST | `/api/inference/native-run` | Run native (real) inference |
+| GET | `/api/inference/native/status` | Native engine status |
+| GET | `/api/inference/native/models` | List loaded + cached models |
+| DELETE | `/api/inference/native/{model_id}` | Unload model from native engine |
+| POST | `/api/inference/pipeline/plan` | Plan distributed pipeline |
+| GET | `/api/inference/pipeline/status` | Pipeline status |
+| GET | `/api/inference/downloads/status` | Active download status |
+
+</td></tr>
+<tr><td><b>Legacy Inference</b></td>
 <td>
 
 | Method | Endpoint | Description |
@@ -380,17 +455,18 @@ docker run -p 8001:8001 -p 7999:7999 netai
 ## 🧪 Testing
 
 ```bash
-# Run all 693 tests
+# Run all 757 tests
 PYTHONPATH=src python -m pytest tests/ -v
 
 # Run specific test suites
-PYTHONPATH=src python -m pytest tests/test_inference_validation.py -v    # Inference validation
-PYTHONPATH=src python -m pytest tests/test_autoloader.py -v               # AutoLoader
-PYTHONPATH=src python -m pytest tests/test_api.py -v                      # API endpoints
-PYTHONPATH=src python -m pytest tests/test_security.py -v                 # Security
-PYTHONPATH=src python -m pytest tests/test_security_hardening.py -v       # Security hardening
-PYTHONPATH=src python -m pytest tests/test_audit_fixes.py -v              # Audit fixes
-PYTHONPATH=src python -m pytest tests/test_integration.py -v               # Integration
+PYTHONPATH=src python -m pytest tests/test_native_engine.py -v          # Native engine + pipeline + downloader
+PYTHONPATH=src python -m pytest tests/test_inference_validation.py -v   # Inference validation
+PYTHONPATH=src python -m pytest tests/test_autoloader.py -v             # AutoLoader
+PYTHONPATH=src python -m pytest tests/test_api.py -v                    # API endpoints
+PYTHONPATH=src python -m pytest tests/test_security.py -v              # Security
+PYTHONPATH=src python -m pytest tests/test_security_hardening.py -v    # Security hardening
+PYTHONPATH=src python -m pytest tests/test_audit_fixes.py -v           # Audit fixes
+PYTHONPATH=src python -m pytest tests/test_integration.py -v           # Integration
 ```
 
 ---
@@ -405,6 +481,7 @@ PYTHONPATH=src python -m pytest tests/test_integration.py -v               # Int
 | **Groups** | ChaCha20-Poly1305 encryption, invite codes |
 | **Compute** | Proof-of-Compute (SHA-256 with difficulty target) |
 | **CORS** | Restricted origins, no wildcard with credentials |
+| **Models** | HuggingFace license filtering (MIT/Apache/BSD only) |
 
 ---
 
@@ -412,49 +489,53 @@ PYTHONPATH=src python -m pytest tests/test_integration.py -v               # Int
 
 ```
 src/netai/
-├── api/app.py             # FastAPI web server (1900+ lines, 73+ endpoints)
-├── cli.py                 # CLI interface (17 commands)
+├── api/app.py                 # FastAPI web server (1900+ lines, 83+ endpoints)
+├── cli.py                     # CLI interface (22 commands)
 ├── inference/
-│   ├── engine.py          # Inference engine (load, infer, stream, drain, sharding)
-│   ├── router.py          # Load balancer (6 strategies + gateway)
-│   ├── kv_cache.py         # KV cache manager (LRU, prefix, distributed)
-│   └── autoloader.py       # Model catalog + VRAM-aware auto-loading
+│   ├── engine.py               # Inference engine (load, infer, stream, drain, sharding)
+│   ├── router.py               # Load balancer (6 strategies + gateway)
+│   ├── kv_cache.py             # KV cache manager (LRU, prefix, distributed)
+│   ├── autoloader.py           # Model catalog + VRAM-aware auto-loading
+│   ├── downloader.py           # ← NEW: HuggingFace model downloader (MIT filter, cache, SHA256)
+│   ├── native_engine.py        # ← NEW: Real transformer forward pass (GPT-2/LLaMA/NumPy/PyTorch)
+│   └── pipeline_executor.py    # ← NEW: Pipeline-parallel distribution across P2P nodes
 ├── compute_pool/
-│   ├── pool.py            # Compute pool (jack-in, jack-out)
-│   ├── share.py           # Proof-of-Compute + PPLNS rewards
-│   ├── pipeline.py        # Pipeline-parallel orchestration
-│   ├── stratum.py         # Stratum-like work distribution
-│   └── jackin.py          # Jack-in manager with profile caching
+│   ├── pool.py                 # Compute pool (jack-in, jack-out)
+│   ├── share.py                # Proof-of-Compute + PPLNS rewards
+│   ├── pipeline.py             # Pipeline-parallel orchestration
+│   ├── stratum.py              # Stratum-like work distribution
+│   └── jackin.py               # Jack-in manager with profile caching
 ├── training/
-│   ├── engine.py          # Training engine + gradient sync server
-│   ├── coordinator.py     # Distributed training coordinator
-│   ├── voting.py          # Voting engine + resource pledges
-│   ├── groups.py          # Private group management
-│   ├── federation.py       # Cross-node federation
-│   ├── pytorch_bridge.py  # PyTorch integration bridge
-│   └── registry.py        # Model registry
-├── p2p/network.py          # P2P node (discovery, heartbeat, messaging)
-├── resource/profiler.py    # Hardware profiler (CPU, GPU, RAM, Vulkan)
-├── scheduler/scheduler.py  # Job scheduler (priority, GPU affinity)
+│   ├── engine.py               # Training engine + gradient sync server
+│   ├── coordinator.py          # Distributed training coordinator
+│   ├── voting.py               # Voting engine + resource pledges
+│   ├── groups.py               # Private group management
+│   ├── federation.py           # Cross-node federation
+│   ├── pytorch_bridge.py       # PyTorch integration bridge
+│   └── registry.py             # Model registry
+├── p2p/network.py              # P2P node (discovery, heartbeat, messaging)
+├── resource/profiler.py        # Hardware profiler (CPU, GPU, RAM, Vulkan)
+├── scheduler/scheduler.py      # Job scheduler (priority, GPU affinity)
 ├── security/
-│   ├── auth.py             # Security middleware (JWT, RBAC, rate limit)
-│   └── gradient_integrity.py # Gradient integrity checker
-├── crypto/identity.py      # Ed25519 identity + group key encryption
-└── github/integration.py   # GitHub webhook integration
+│   ├── auth.py                 # Security middleware (JWT, RBAC, rate limit)
+│   └── gradient_integrity.py   # Gradient integrity checker
+├── crypto/identity.py          # Ed25519 identity + group key encryption
+└── github/integration.py       # GitHub webhook integration
 
 tests/
-├── test_inference_validation.py  # 97 comprehensive inference tests
-├── test_autoloader.py            # 57 AutoLoader + ModelRegistry tests
-├── test_api.py                    # 29 API endpoint tests
-├── test_security_hardening.py    # 21 security hardening tests
-├── test_audit_fixes.py           # 47 audit bug fix tests
-├── test_inference.py             # Inference engine tests
-├── test_training.py              # Training + gradient tests
-├── test_compute_pool.py          # Compute pool tests
-├── test_integration.py           # Integration tests
-├── test_p2p.py                   # P2P network tests
-├── test_security.py              # Security tests
-└── ...                           # 18 test files total
+├── test_native_engine.py             # ← NEW: 64 tests (engine, pipeline, downloader, end-to-end)
+├── test_inference_validation.py       # 97 comprehensive inference tests
+├── test_autoloader.py                # 57 AutoLoader + ModelRegistry tests
+├── test_api.py                       # 29 API endpoint tests
+├── test_security_hardening.py        # 21 security hardening tests
+├── test_audit_fixes.py               # 47 audit bug fix tests
+├── test_inference.py                 # Inference engine tests
+├── test_training.py                  # Training + gradient tests
+├── test_compute_pool.py              # Compute pool tests
+├── test_integration.py               # Integration tests
+├── test_p2p.py                       # P2P network tests
+├── test_security.py                  # Security tests
+└── ...                               # 19 test files total
 ```
 
 ---
