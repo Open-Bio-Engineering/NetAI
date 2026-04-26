@@ -29,6 +29,13 @@ try:
 except ImportError:
     torch = None
 
+HAS_TOKENIZERS = False
+try:
+    from tokenizers import Tokenizer as _HFTokenizer
+    HAS_TOKENIZERS = True
+except ImportError:
+    pass
+
 
 class LayerShard(BaseModel):
     shard_id: str = Field(default_factory=lambda: hashlib.sha256(os.urandom(8)).hexdigest()[:12])
@@ -186,6 +193,8 @@ class NativeInferenceEngine:
         self.output_proj: dict[str, np.ndarray] = {}
         self.layer_norm_f: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._loaded_models: set[str] = set()
+        self._tokenizers: dict[str, Any] = {}
+        self._has_tokenizers = HAS_TOKENIZERS
 
     def _load_safetensors_header(self, path: str) -> dict[str, Any]:
         try:
@@ -400,6 +409,19 @@ class NativeInferenceEngine:
         logger.info("Loaded %d/%d layers for %s (%.1f MB, %.1fs)",
                      num_layers_loaded, layer_end - layer_start + 1,
                      model_id, total_mem / (1024 * 1024), load_time)
+        # Try to load tokenizer
+        tok_path = os.path.join(model_dir, "tokenizer.json")
+        if os.path.exists(tok_path) and self._has_tokenizers:
+            try:
+                from tokenizers import Tokenizer as _HFTok
+                tok = _HFTok.from_file(tok_path)
+                self._tokenizers[model_id] = tok
+                logger.info("Loaded tokenizer for %s (vocab_size=%d)", model_id, tok.get_vocab_size())
+            except Exception as e:
+                logger.warning("Failed to load tokenizer for %s: %s", model_id, e)
+        elif os.path.exists(tok_path):
+            logger.warning("tokenizers library not available; GPT-2 output will show token IDs instead of text")
+
         return shard
 
     def _tokenize_simple(self, text: str, vocab_size: int = 50257) -> list[int]:
@@ -649,12 +671,32 @@ class NativeInferenceEngine:
         latency_ms = (time.time() - t0) * 1000
         tps = total_generated / max(latency_ms / 1000, 0.001)
 
+        text = ""
+        tok = self._tokenizers.get(model_id)
+        if tok is not None:
+            try:
+                text = tok.decode(tokens)
+            except Exception as e:
+                logger.warning("Decode failed: %s", e)
+                text = " ".join(str(t) for t in tokens)
+        else:
+            text = " ".join(str(t) for t in tokens)
+
+        prompt_text = ""
+        if tok is not None:
+            try:
+                prompt_text = tok.decode(prompt_tokens)
+            except Exception:
+                prompt_text = ""
+
         return {
             "tokens": tokens,
             "generated_tokens": tokens[len(prompt_tokens):],
+            "generated_text": text[len(prompt_text):] if prompt_text and text.startswith(prompt_text) else text,
             "num_generated": total_generated,
             "latency_ms": round(latency_ms, 1),
             "tokens_per_second": round(tps, 1),
+            "text": text,
         }
 
     def forward_segment(

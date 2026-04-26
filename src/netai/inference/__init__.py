@@ -24,6 +24,8 @@ __all__ = [
     "KVCacheManager", "DistributedKVCache", "CacheEntry", "CachePartition",
     "AutoLoader", "ModelEntry", "ModelRegistry", "ModelSizeClass",
     "ModelDownloader", "HFModelSource",
+    "NativeBPEEncoder",
+    "get_tokenizer",
     "NativeInferenceEngine", "LayerShard", "LayerResult",
     "PipelineExecutor", "PipelineStage", "PipelineResult",
 ]

@@ -647,3 +647,107 @@ class TestEndToEndNativeGeneration:
 
             shard2 = engine.load_model("tiny-gpt2", tmpdir)
             assert shard2.loaded
+
+class TestNativeBPEEncoder:
+    """Tests for the native BPE tokenizer."""
+
+    def test_init_no_file(self):
+        from netai.inference.tokenizer import NativeBPEEncoder
+        tok = NativeBPEEncoder("/nonexistent/tokenizer.json")
+        assert not tok.load()
+
+    def test_load_gpt2_tokenizer(self):
+        from netai.inference.tokenizer import NativeBPEEncoder
+        path = os.path.join(os.path.dirname(__file__), "..", "inference_cache", "models", "gpt2", "tokenizer.json")
+        if not os.path.exists(path):
+            pytest.skip("GPT-2 tokenizer not found")
+        tok = NativeBPEEncoder(path)
+        assert tok.load()
+        assert tok.get_vocab_size() == 50257
+        assert tok.bos_token_id == 50256
+
+    def test_encode_simple(self):
+        from netai.inference.tokenizer import NativeBPEEncoder
+        path = os.path.join(os.path.dirname(__file__), "..", "inference_cache", "models", "gpt2", "tokenizer.json")
+        if not os.path.exists(path):
+            pytest.skip("GPT-2 tokenizer not found")
+        tok = NativeBPEEncoder(path)
+        assert tok.load()
+
+        ids = tok.encode("Hello")
+        assert len(ids) == 1
+        assert ids[0] == 15496
+
+    def test_encode_multiple_words(self):
+        from netai.inference.tokenizer import NativeBPEEncoder
+        path = os.path.join(os.path.dirname(__file__), "..", "inference_cache", "models", "gpt2", "tokenizer.json")
+        if not os.path.exists(path):
+            pytest.skip("GPT-2 tokenizer not found")
+        tok = NativeBPEEncoder(path)
+        assert tok.load()
+
+        ids = tok.encode("Hello world!")
+        assert len(ids) == 3
+        assert ids == [15496, 995, 0]
+
+    def test_decode_roundtrip(self):
+        from netai.inference.tokenizer import NativeBPEEncoder
+        path = os.path.join(os.path.dirname(__file__), "..", "inference_cache", "models", "gpt2", "tokenizer.json")
+        if not os.path.exists(path):
+            pytest.skip("GPT-2 tokenizer not found")
+        tok = NativeBPEEncoder(path)
+        assert tok.load()
+
+        texts = [
+            "Hello world!",
+            "The quick brown fox jumps over the lazy dog.",
+            "NetAI is a distributed P2P inference system.",
+            "GPT-2: 124M parameters, 12 layers, 768 hidden size.",
+        ]
+        for text in texts:
+            ids = tok.encode(text)
+            decoded = tok.decode(ids)
+            assert decoded == text, f"Round-trip failed: {text!r} -> {decoded!r}"
+
+    def test_encode_empty(self):
+        from netai.inference.tokenizer import NativeBPEEncoder
+        path = os.path.join(os.path.dirname(__file__), "..", "inference_cache", "models", "gpt2", "tokenizer.json")
+        if not os.path.exists(path):
+            pytest.skip("GPT-2 tokenizer not found")
+        tok = NativeBPEEncoder(path)
+        assert tok.load()
+
+        ids = tok.encode("")
+        assert isinstance(ids, list)
+
+    def test_get_tokenizer_from_dir(self):
+        from netai.inference.tokenizer import get_tokenizer
+        path = os.path.join(os.path.dirname(__file__), "..", "inference_cache", "models", "gpt2")
+        if not os.path.exists(path):
+            pytest.skip("GPT-2 model dir not found")
+        tok = get_tokenizer(path)
+        assert tok is not None
+        assert tok.get_vocab_size() == 50257
+
+    def test_get_tokenizer_nonexistent_dir(self):
+        from netai.inference.tokenizer import get_tokenizer
+        tok = get_tokenizer("/nonexistent/model")
+        assert tok is None
+
+
+class TestTokenizerAPI:
+    """Tests for tokenizer API endpoints."""
+
+    def test_tokenize_request_model(self):
+        from netai.api.app import TokenizeRequest
+        req = TokenizeRequest(model_id="gpt2", text="Hello world!")
+        assert req.model_id == "gpt2"
+        assert req.text == "Hello world!"
+        assert not req.with_special
+
+    def test_decode_request_model(self):
+        from netai.api.app import DecodeRequest
+        req = DecodeRequest(model_id="gpt2", token_ids=[15496, 995, 0])
+        assert req.model_id == "gpt2"
+        assert req.token_ids == [15496, 995, 0]
+        assert req.skip_special_tokens
