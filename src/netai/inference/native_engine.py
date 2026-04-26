@@ -333,7 +333,10 @@ class NativeInferenceEngine:
 
         for i in range(layer_start, layer_end + 1):
             layer_weights = {}
-            prefix_patterns = [f"transformer.h.{i}.", f"model.layers.{i}.", f"encoder.layer.{i}."]
+            prefix_patterns = [
+                f"transformer.h.{i}.", f"model.layers.{i}.", f"encoder.layer.{i}.",
+                f"h.{i}.", f"layers.{i}.", f"block.{i}.",
+            ]
             for key, val in all_weights.items():
                 for prefix in prefix_patterns:
                     if key.startswith(prefix):
@@ -347,23 +350,41 @@ class NativeInferenceEngine:
                 num_layers_loaded += 1
 
         embed_key = "wte.weight" if is_gpt2 else "model.embed_tokens.weight"
-        for candidate in [embed_key, "transformer.wte.weight", "model.embed_tokens.weight"]:
+        embed_candidates = [embed_key, "transformer.wte.weight", "model.embed_tokens.weight", "wpe.weight"]
+        for candidate in embed_candidates:
             if candidate in all_weights:
                 self.embed_tokens[model_id] = all_weights[candidate].astype(np.float32)
                 total_mem += all_weights[candidate].nbytes
                 break
 
         output_key = "lm_head.weight" if not is_gpt2 else "wte.weight"
-        for candidate in [output_key, "lm_head.weight", "transformer.ln_f.weight"]:
+        output_candidates = [
+            output_key, "lm_head.weight", "transformer.ln_f.weight",
+            "transformer.lm_head.weight",
+        ]
+        for candidate in output_candidates:
             if candidate in all_weights:
                 if is_gpt2 and candidate == "transformer.ln_f.weight":
                     ln_w = all_weights["transformer.ln_f.weight"].astype(np.float32)
-                    ln_b = all_weights.get("transformer.ln_f.bias", np.zeros_like(ln_w)).astype(np.float32)
+                    ln_b_candidate = all_weights.get("transformer.ln_f.bias")
+                    ln_b = ln_b_candidate.astype(np.float32) if ln_b_candidate is not None else np.zeros_like(ln_w)
                     self.layer_norm_f[model_id] = (ln_w, ln_b)
                     total_mem += ln_w.nbytes + ln_b.nbytes
                 elif candidate == "lm_head.weight":
                     self.output_proj[model_id] = all_weights[candidate].astype(np.float32)
                     total_mem += all_weights[candidate].nbytes
+
+        ln_f_candidates = ["ln_f.weight", "transformer.ln_f.weight", "model.norm.weight"]
+        ln_f_b_candidates = ["ln_f.bias", "transformer.ln_f.bias", "model.norm.bias"]
+        for j, candidate in enumerate(ln_f_candidates):
+            if candidate in all_weights:
+                ln_w = all_weights[candidate].astype(np.float32)
+                ln_b_key = ln_f_b_candidates[j] if j < len(ln_f_b_candidates) else ""
+                ln_b_val = all_weights.get(ln_b_key)
+                ln_b = ln_b_val.astype(np.float32) if ln_b_val is not None else np.zeros_like(ln_w)
+                self.layer_norm_f[model_id] = (ln_w, ln_b)
+                total_mem += ln_w.nbytes + ln_b.nbytes
+                break
 
         self._loaded_models.add(model_id)
         load_time = time.time() - t0

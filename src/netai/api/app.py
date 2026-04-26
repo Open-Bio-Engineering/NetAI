@@ -1270,716 +1270,420 @@ def _dashboard_html() -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NetAI - Distributed AI Training</title>
+<title>NetAI - Distributed AI Inference</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; }
-  .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); padding: 24px 32px; border-bottom: 1px solid #1a3a5c; }
-  .header h1 { font-size: 28px; color: #00d2ff; }
-  .header p { color: #8899aa; margin-top: 4px; font-size: 14px; }
-  .tabs { display: flex; background: #111; border-bottom: 1px solid #333; overflow-x: auto; }
-  .tab { padding: 12px 24px; cursor: pointer; border-bottom: 2px solid transparent; color: #888; font-size: 14px; white-space: nowrap; transition: all 0.2s; }
-  .tab:hover { color: #ccc; }
-  .tab.active { color: #00d2ff; border-bottom-color: #00d2ff; }
-  .content { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
-  .panel { display: none; }
-  .panel.active { display: block; }
-  .card { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-  .card h3 { color: #00d2ff; margin-bottom: 12px; font-size: 16px; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-  .stat { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; text-align: center; }
-  .stat .value { font-size: 32px; font-weight: bold; color: #00d2ff; }
-  .stat .label { font-size: 12px; color: #888; margin-top: 4px; text-transform: uppercase; letter-spacing: 1px; }
-  table { width: 100%; border-collapse: collapse; }
-  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a2a2a; font-size: 13px; }
-  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
-  tr:hover { background: #222; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .badge.running { background: #0066cc33; color: #4da6ff; }
-  .badge.completed { background: #00cc6633; color: #00cc66; }
-  .badge.pending { background: #cccc0033; color: #cccc00; }
-  .badge.failed { background: #cc003333; color: #cc3333; }
-  .badge.active { background: #0066cc33; color: #4da6ff; }
-  .badge.passed { background: #00cc6633; color: #00cc66; }
-  .btn { padding: 8px 16px; border: 1px solid #333; background: #222; color: #e0e0e0; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .btn:hover { background: #333; border-color: #00d2ff; }
-  .btn-primary { background: #004466; border-color: #00d2ff; color: #00d2ff; }
-  .btn-primary:hover { background: #006688; }
-  .form-group { margin-bottom: 12px; }
-  .form-group label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
-  .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px 12px; background: #111; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; font-size: 14px; }
-  .form-group input:focus, .form-group select:focus { outline: none; border-color: #00d2ff; }
-  .form-row { display: flex; gap: 12px; flex-wrap: wrap; }
-  .form-row .form-group { flex: 1; min-width: 150px; }
-  .progress-bar { height: 8px; background: #2a2a2a; border-radius: 4px; overflow: hidden; }
-  .progress-fill { height: 100%; background: linear-gradient(90deg, #00d2ff, #00ff88); border-radius: 4px; transition: width 0.3s; }
-  .vote-bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden; margin: 8px 0; }
-  .vote-for { background: #00cc66; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #000; font-weight: 600; }
-  .vote-against { background: #cc3333; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; font-weight: 600; }
-  #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; }
-  .toast { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; font-size: 13px; animation: slideIn 0.3s; }
-  @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh}
+.header{background:linear-gradient(135deg,#0d1117 0%,#161b22 50%,#0d1117 100%);padding:20px 32px;border-bottom:1px solid #21262d;display:flex;align-items:center;gap:16px}
+.header h1{font-size:24px;color:#58a6ff;font-weight:700;letter-spacing:-0.5px}
+.header h1 span{color:#8b949e;font-weight:400;font-size:14px;margin-left:8px}
+.header .node-id{color:#484f58;font-size:12px;font-family:monospace;margin-left:auto}
+.tabs{display:flex;background:#0d1117;border-bottom:1px solid #21262d;padding:0 24px;gap:0;overflow-x:auto}
+.tab{padding:12px 20px;cursor:pointer;color:#8b949e;font-size:13px;font-weight:500;border-bottom:2px solid transparent;transition:all .15s;white-space:nowrap}
+.tab:hover{color:#c9d1d9;background:#161b22}
+.tab.active{color:#58a6ff;border-bottom-color:#58a6ff;background:#161b22}
+.content{padding:24px 32px;max-width:1400px;margin:0 auto}
+.panel{display:none}.panel.active{display:block}
+.card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px;margin-bottom:16px}
+.card h3{color:#58a6ff;font-size:15px;margin-bottom:12px;font-weight:600}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.stat{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px;text-align:center}
+.stat .value{font-size:28px;font-weight:700;color:#58a6ff}
+.stat .label{font-size:11px;color:#8b949e;margin-top:2px;text-transform:uppercase;letter-spacing:.5px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #21262d;font-size:13px}
+th{color:#8b949e;font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.5px}
+tr:hover{background:#1c2128}
+.btn{padding:8px 16px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
+.btn:hover{background:#30363d;border-color:#58a6ff;color:#fff}
+.btn-primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.btn-primary:hover{background:#388bfd}
+.btn-danger{background:#da3633;border-color:#da3633;color:#fff}
+.btn-danger:hover{background:#f85149}
+.btn-sm{padding:4px 10px;font-size:12px}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;font-size:11px;color:#8b949e;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.form-group input,.form-group select,.form-group textarea{width:100%;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e0e0e0;font-size:14px;font-family:inherit}
+.form-group input:focus,.form-group select:focus,.form-group textarea:focus{outline:none;border-color:#58a6ff;box-shadow:0 0 0 1px #1f6feb33}
+.form-row{display:flex;gap:12px;flex-wrap:wrap}
+.form-row .form-group{flex:1;min-width:140px}
+.output-box{margin-top:12px;padding:16px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:'JetBrains Mono','Fira Code',monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto;color:#7ee787;display:none}
+.output-box.error{color:#f85149}
+.output-box.visible{display:block}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-success{background:#1b4332;color:#7ee787}
+.badge-warning{background:#4a3000;color:#d29922}
+.badge-error{background:#4c1111;color:#f85149}
+.badge-info{background:#0c2d6b;color:#58a6ff}
+.badge-neutral{background:#21262d;color:#8b949e}
+.model-card{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:16px;margin-bottom:12px}
+.model-card .model-name{color:#58a6ff;font-size:16px;font-weight:600}
+.model-card .model-meta{color:#8b949e;font-size:12px;margin-top:4px}
+.gen-output{background:#0d1117;border:1px solid #238636;border-radius:6px;padding:16px;margin-top:12px;font-family:'JetBrains Mono',monospace;font-size:14px;line-height:1.6;color:#e6edf3;white-space:pre-wrap;max-height:300px;overflow-y:auto}
+.gen-meta{display:flex;gap:16px;margin-top:8px;color:#8b949e;font-size:12px}
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite;margin-right:8px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>NetAI</h1>
-  <p>Open-Source Distributed AI Training &bull; P2P Resource Pooling &bull; CPU/GPU Training &bull; Governance Voting</p>
+  <h1>⚡ NetAI <span>Distributed AI Inference</span></h1>
+  <div class="node-id" id="node-id">connecting...</div>
 </div>
 <div class="tabs">
   <div class="tab active" onclick="showTab('overview')">Overview</div>
-  <div class="tab" onclick="showTab('training')">Training</div>
-  <div class="tab" onclick="showTab('voting')">Voting</div>
-  <div class="tab" onclick="showTab('groups')">Groups</div>
-  <div class="tab" onclick="showTab('pledges')">Resources</div>
-  <div class="tab" onclick="showTab('peers')">Peers</div>
-  <div class="tab" onclick="showTab('inference')">Inference</div>
-  <div class="tab" onclick="showTab('jackin')">Jack In</div>
-  <div class="tab" onclick="showTab('github')">GitHub</div>
-  <div class="tab" onclick="showTab('gradients')">Gradients</div>
-  <div class="tab" onclick="showTab('metrics')">Metrics</div>
-  <div class="tab" onclick="showTab('auth')">Auth</div>
+  <div class="tab" onclick="showTab('models')">Models</div>
+  <div class="tab" onclick="showTab('generate')">Generate</div>
+  <div class="tab" onclick="showTab('download')">Download</div>
+  <div class="tab" onclick="showTab('pipeline')">Pipeline</div>
+  <div class="tab" onclick="showTab('network')">Network</div>
 </div>
 <div class="content">
-  <div id="toast-container"></div>
+  <div id="toast-container" style="position:fixed;top:16px;right:16px;z-index:9999"></div>
 
+  <!-- OVERVIEW -->
   <div id="overview" class="panel active">
-    <div class="stats" id="overview-stats"></div>
-    <div class="card"><h3>System Status</h3><div id="sys-status">Loading...</div></div>
-    <div class="card"><h3>Recent Activity</h3><div id="recent-activity">Loading...</div></div>
-  </div>
-
-  <div id="training" class="panel">
+    <div class="stats" id="ov-stats"></div>
     <div class="card">
-      <h3>Submit Training Job</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Model Name</label><input id="t-model" value="gpt2-small"></div>
-        <div class="form-group"><label>Architecture</label><select id="t-arch"><option>transformer</option><option>mlp</option><option>cnn</option></select></div>
-        <div class="form-group"><label>Hidden Size</label><input id="t-hidden" type="number" value="768"></div>
-        <div class="form-group"><label>Layers</label><input id="t-layers" type="number" value="12"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Steps</label><input id="t-steps" type="number" value="1000"></div>
-        <div class="form-group"><label>Batch Size</label><input id="t-batch" type="number" value="8"></div>
-        <div class="form-group"><label>Learning Rate</label><input id="t-lr" value="3e-4"></div>
-        <div class="form-group"><label>Device</label><select id="t-device"><option value="cuda">CUDA GPU</option><option value="cpu">CPU</option><option value="rocm">ROCm</option><option value="mps">MPS</option></select></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Group ID (optional)</label><input id="t-group" placeholder="Leave empty for public"></div>
-      </div>
-      <button class="btn btn-primary" onclick="submitTraining()">Submit Training Job</button>
+      <h3>🖥️ Hardware Profile</h3>
+      <div id="ov-hardware">Loading...</div>
     </div>
-    <div class="card"><h3>Active Jobs</h3><div id="jobs-list">Loading...</div></div>
-  </div>
-
-  <div id="voting" class="panel">
     <div class="card">
-      <h3>Propose a Model to Train</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Model Name</label><input id="v-model" value="llama-7b-finetune"></div>
-        <div class="form-group"><label>Architecture</label><select id="v-arch"><option>transformer</option><option>mamba</option><option>rwkv</option></select></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Description</label><textarea id="v-desc" rows="2">Fine-tune LLaMA 7B on domain-specific data</textarea></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Your ID</label><input id="v-proposer" value="user-1"></div>
-        <div class="form-group"><label>Group (optional)</label><input id="v-group" placeholder="Any group"></div>
-      </div>
-      <button class="btn btn-primary" onclick="proposeModel()">Submit Proposal</button>
-    </div>
-    <div class="card"><h3>Active Proposals</h3><div id="proposals-list">Loading...</div></div>
-    <div class="card">
-      <h3>Cast Vote</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Proposal ID</label><input id="cv-proposal" placeholder="proposal-id"></div>
-        <div class="form-group"><label>Voter ID</label><input id="cv-voter" value="user-1"></div>
-        <div class="form-group"><label>Vote</label><select id="cv-choice"><option value="for">For</option><option value="against">Against</option></select></div>
-      </div>
-      <button class="btn btn-primary" onclick="castVote()">Cast Vote</button>
+      <h3>🧠 Native Engine</h3>
+      <div id="ov-native">Loading...</div>
     </div>
   </div>
 
-  <div id="groups" class="panel">
+  <!-- MODELS -->
+  <div id="models" class="panel">
     <div class="card">
-      <h3>Create Training Group</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Group Name</label><input id="g-name" value="my-research-team"></div>
-        <div class="form-group"><label>Owner ID</label><input id="g-owner" value="user-1"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Description</label><textarea id="g-desc" rows="2"></textarea></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Visibility</label><select id="g-vis"><option value="private">Private</option><option value="public">Public</option><option value="secret">Secret</option></select></div>
-        <div class="form-group"><label>Max Members</label><input id="g-max" type="number" value="50"></div>
-        <div class="form-group"><label>Require Approval</label><select id="g-approval"><option value="true">Yes</option><option value="false">No</option></select></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Passphrase (optional)</label><input id="g-pass" type="password" placeholder="Leave empty for auto-key"></div>
-      </div>
-      <button class="btn btn-primary" onclick="createGroup()">Create Group</button>
+      <h3>📥 Loaded Models</h3>
+      <div id="models-loaded">Loading...</div>
     </div>
     <div class="card">
-      <h3>Join a Group</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Group ID</label><input id="jg-id" placeholder="group-id"></div>
-        <div class="form-group"><label>User ID</label><input id="jg-user" value="user-1"></div>
-        <div class="form-group"><label>Invite Code</label><input id="jg-invite" placeholder="Optional for public groups"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>CPU Cores</label><input id="jg-cpu" type="number" value="4"></div>
-        <div class="form-group"><label>GPU Count</label><input id="jg-gpu" type="number" value="0"></div>
-        <div class="form-group"><label>RAM (GB)</label><input id="jg-ram" type="number" value="16"></div>
-      </div>
-      <button class="btn btn-primary" onclick="joinGroup()">Join Group</button>
+      <h3>📂 Cached Models</h3>
+      <div id="models-cached">Loading...</div>
     </div>
-    <div class="card"><h3>All Groups</h3><div id="groups-list">Loading...</div></div>
+    <div class="card">
+      <h3>📋 Model Catalog</h3>
+      <div id="models-catalog">Loading...</div>
+    </div>
   </div>
 
-  <div id="pledges" class="panel">
+  <!-- GENERATE -->
+  <div id="generate" class="panel">
     <div class="card">
-      <h3>Pledge Resources</h3>
-      <div class="form-row">
-        <div class="form-group"><label>User ID</label><input id="p-user" value="user-1"></div>
-        <div class="form-group"><label>Node ID</label><input id="p-node" placeholder="auto"></div>
+      <h3>🧠 Native Inference</h3>
+      <p style="color:#8b949e;margin-bottom:16px;font-size:13px">Run real transformer inference on models loaded into the native engine. No external runtime required.</p>
+      <div class="form-group">
+        <label>Model ID</label>
+        <select id="gen-model"><option value="">-- Select a loaded model --</option></select>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>CPU Cores</label><input id="p-cpu" type="number" value="4"></div>
-        <div class="form-group"><label>GPU Count</label><input id="p-gpu" type="number" value="1"></div>
-        <div class="form-group"><label>RAM (GB)</label><input id="p-ram" type="number" value="32"></div>
+        <div class="form-group"><label>Prompt</label><textarea id="gen-prompt" rows="4" placeholder="Enter your prompt...">The meaning of life is</textarea></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Time (hours)</label><input id="p-time" type="number" value="24"></div>
-        <div class="form-group"><label>Group (optional)</label><input id="p-group" placeholder="Anyone can use"></div>
+        <div class="form-group"><label>Max Tokens</label><input id="gen-max-tokens" type="number" value="64" min="1" max="4096"></div>
+        <div class="form-group"><label>Temperature</label><input id="gen-temp" type="number" value="0.7" min="0" max="2" step="0.1"></div>
+        <div class="form-group"><label>Top-P</label><input id="gen-topp" type="number" value="0.9" min="0" max="1" step="0.05"></div>
       </div>
-      <button class="btn btn-primary" onclick="pledgeResources()">Pledge Resources</button>
+      <button class="btn btn-primary" onclick="generateNative()" id="gen-btn">⚡ Generate</button>
+      <button class="btn" onclick="loadLocalModel()" style="margin-left:8px">📂 Load Model from Disk</button>
+      <div id="gen-output" class="output-box"></div>
+      <div id="gen-meta" class="gen-meta" style="display:none"></div>
     </div>
-    <div class="card"><h3>Cluster Resources</h3><div id="cluster-resources">Loading...</div></div>
-    <div class="card"><h3>Leaderboard</h3><div id="leaderboard">Loading...</div></div>
   </div>
 
-  <div id="peers" class="panel">
-    <div class="card"><h3>Peer Network</h3><div id="peers-list">Loading...</div></div>
+  <!-- DOWNLOAD -->
+  <div id="download" class="panel">
+    <div class="card">
+      <h3>🌐 Download from HuggingFace</h3>
+      <p style="color:#8b949e;margin-bottom:16px;font-size:13px">Download open-source models directly from HuggingFace. Only MIT/Apache-compatible licenses are allowed.</p>
+      <div class="form-row">
+        <div class="form-group"><label>Model ID (e.g. gpt2, facebook/opt-125m)</label><input id="dl-model" value="gpt2"></div>
+        <div class="form-group"><label>Revision</label><input id="dl-revision" value="main"></div>
+      </div>
+      <button class="btn btn-primary" onclick="downloadModel()" id="dl-btn">📥 Download & Load</button>
+      <div id="dl-output" class="output-box"></div>
+    </div>
+    <div class="card">
+      <h3>📂 Load from Local Directory</h3>
+      <p style="color:#8b949e;margin-bottom:16px;font-size:13px">Load a model from a local directory containing config.json and model weights.</p>
+      <div class="form-row">
+        <div class="form-group"><label>Directory Path</label><input id="ll-dir" value="/path/to/model"></div>
+        <div class="form-group"><label>Model ID</label><input id="ll-modelid" value="my-model"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Layer Start (-1 = all)</label><input id="ll-layer-start" type="number" value="-1"></div>
+        <div class="form-group"><label>Layer End (-1 = all)</label><input id="ll-layer-end" type="number" value="-1"></div>
+      </div>
+      <button class="btn btn-primary" onclick="loadLocalModel()">📂 Load Model</button>
+    </div>
   </div>
 
-  <div id="inference" class="panel">
+  <!-- PIPELINE -->
+  <div id="pipeline" class="panel">
     <div class="card">
-      <h3>Load Model for Inference</h3>
+      <h3>🔀 Pipeline-Parallel Plan</h3>
+      <p style="color:#8b949e;margin-bottom:16px;font-size:13px">Distribute transformer layers across multiple nodes. Each node runs a contiguous range of layers.</p>
       <div class="form-row">
-        <div class="form-group"><label>Model ID</label><input id="inf-model" value="gpt2-small"></div>
-        <div class="form-group"><label>Version</label><input id="inf-version" value="latest"></div>
-        <div class="form-group"><label>Shards</label><input id="inf-shards" type="number" value="1"></div>
-        <div class="form-group"><label>Device</label><select id="inf-device"><option value="auto">Auto</option><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div>
+        <div class="form-group"><label>Model ID</label><input id="pipe-model" value="gpt2"></div>
+        <div class="form-group"><label>VRAM per node (MB)</label><input id="pipe-vram" type="number" value="8192"></div>
       </div>
-      <div class="form-row">
-        <div class="form-group"><label>Mirror Enabled</label><select id="inf-mirror"><option value="true">Yes</option><option value="false">No</option></select></div>
-        <div class="form-group"><label>Group (optional)</label><input id="inf-group" placeholder=""></div>
-      </div>
-      <button class="btn btn-primary" onclick="loadModel()">Load Model</button>
+      <button class="btn btn-primary" onclick="planPipeline()">🔀 Plan Pipeline</button>
+      <div id="pipe-output" class="output-box"></div>
     </div>
     <div class="card">
-      <h3>Run Inference</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Model</label><input id="inf-run-model" value="gpt2-small"></div>
-        <div class="form-group"><label>Max Tokens</label><input id="inf-max-tokens" type="number" value="128"></div>
-        <div class="form-group"><label>Temperature</label><input id="inf-temp" type="number" value="0.7" step="0.1"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Prompt</label><textarea id="inf-prompt" rows="3">The meaning of life is</textarea></div>
-      </div>
-      <button class="btn btn-primary" onclick="runInference()">Generate</button>
-      <div id="inf-output" style="margin-top:12px;padding:12px;background:#111;border:1px solid #333;border-radius:6px;display:none;"></div>
+      <h3>📊 Pipeline Status</h3>
+      <div id="pipe-status">No pipeline configured</div>
     </div>
-    <div class="card"><h3>Inference Cluster Status</h3><div id="inf-status">Loading...</div></div>
   </div>
 
-  <div id="jackin" class="panel">
+  <!-- NETWORK -->
+  <div id="network" class="panel">
     <div class="card">
-      <h3>&#9889; Jack In &mdash; Join the Network</h3>
-      <p style="color:#888;margin-bottom:16px">Jack into distributed training or inference. Your resources (CPU/GPU/RAM) are pooled and you earn reputation for contributing.</p>
-      <div class="form-row">
-        <div class="form-group"><label>User ID</label><input id="ji-user" value="user-1"></div>
-        <div class="form-group"><label>Mode</label><select id="ji-mode"><option value="both">Training + Inference</option><option value="training">Training Only</option><option value="inference">Inference Only</option></select></div>
-        <div class="form-group"><label>Group (optional)</label><input id="ji-group" placeholder="Any group"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>CPU Cores (0=auto)</label><input id="ji-cpu" type="number" value="0"></div>
-        <div class="form-group"><label>GPU Count (0=auto)</label><input id="ji-gpu" type="number" value="0"></div>
-        <div class="form-group"><label>RAM GB (0=auto)</label><input id="ji-ram" type="number" value="0"></div>
-        <div class="form-group"><label>Hours</label><input id="ji-hours" type="number" value="24"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Models to Serve (comma-separated)</label><input id="ji-models" placeholder="gpt2-small,llama-7b"></div>
-      </div>
-      <button class="btn btn-primary" onclick="jackIn()">&#9889; Jack In</button>
-      <div id="ji-result" style="margin-top:12px;display:none;"></div>
-    </div>
-    <div class="card"><h3>Current Network Resources</h3><div id="ji-network">Loading...</div></div>
-  </div>
-
-  <div id="github" class="panel">
-    <div class="card">
-      <h3>GitHub Integration</h3>
-      <p style="color:#888;margin-bottom:16px">Configure webhook to your repo to auto-trigger training on commits. POST to <code>/api/github/webhook</code> with X-Hub-Signature-256 header.</p>
-      <div class="form-row">
-        <div class="form-group"><label>Repo URL</label><input id="gh-repo" placeholder="https://github.com/user/repo"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Branch</label><input id="gh-branch" value="main"></div>
-        <div class="form-group"><label>Webhook Secret</label><input id="gh-secret" type="password"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Access Token</label><input id="gh-token" type="password"></div>
-      </div>
-    </div>
-    <div class="card"><h3>Commit-Triggered Training</h3><p style="color:#888">When enabled, pushing to the configured branch triggers automatic training. Config file: <code>netai.yaml</code> in repo root.</p></div>
-  </div>
-
-  <div id="gradients" class="panel">
-    <div class="card">
-      <h3>Gradient Sync</h3>
-      <p style="color:#888;margin-bottom:16px">Exchange gradient updates between P2P nodes for distributed training.</p>
-      <div class="form-row">
-        <div class="form-group"><label>Job ID</label><input id="gs-job" placeholder="job-id"></div>
-        <div class="form-group"><label>Step</label><input id="gs-step" type="number" value="1"></div>
-      </div>
-      <div class="form-row">
-        <div class="form-group"><label>Peer Node ID</label><input id="gs-peer-id" placeholder="node-id"></div>
-        <div class="form-group"><label>Peer Endpoint</label><input id="gs-peer-ep" placeholder="http://peer:8000"></div>
-      </div>
-      <button class="btn btn-primary" onclick="addGradientPeer()">Add Peer</button>
-      <button class="btn" onclick="aggregateGradients()" style="margin-left:8px">Aggregate</button>
-      <button class="btn" onclick="pushGradients()" style="margin-left:8px">Push</button>
-      <button class="btn" onclick="pullGradients()" style="margin-left:8px">Pull</button>
-    </div>
-    <div class="card"><h3>Sync Status</h3><div id="gs-status">Loading...</div></div>
-  </div>
-
-  <div id="metrics" class="panel">
-    <div class="card">
-      <h3>Prometheus Metrics</h3>
-      <p style="color:#888;margin-bottom:16px">Export metrics in Prometheus format. Scrape endpoint: <code>/api/metrics</code></p>
-      <button class="btn btn-primary" onclick="loadMetrics()">Refresh Metrics</button>
-    </div>
-    <div class="card"><h3>Current Metrics</h3><pre id="metrics-content" style="color:#00ff88;font-family:monospace;font-size:12px;overflow-x:auto;white-space:pre-wrap;">Loading...</pre></div>
-  </div>
-
-  <div id="auth" class="panel">
-    <div class="card">
-      <h3>Create Auth Token</h3>
-      <div class="form-row">
-        <div class="form-group"><label>User ID</label><input id="at-user" value="user-1"></div>
-        <div class="form-group"><label>TTL (hours)</label><input id="at-ttl" type="number" value="24"></div>
-      </div>
-      <button class="btn btn-primary" onclick="createAuthToken()">Generate Token</button>
-      <div id="at-result" style="margin-top:12px;display:none;"></div>
+      <h3>🌐 Network Status</h3>
+      <div id="net-status">Loading...</div>
     </div>
     <div class="card">
-      <h3>Create API Key</h3>
-      <div class="form-row">
-        <div class="form-group"><label>User ID</label><input id="ak-user" value="user-1"></div>
-        <div class="form-group"><label>Key Name</label><input id="ak-name" value="default"></div>
-      </div>
-      <button class="btn btn-primary" onclick="createApiKey()">Generate Key</button>
-      <div id="ak-result" style="margin-top:12px;display:none;"></div>
-    </div>
-    <div class="card">
-      <h3>Verify Token</h3>
-      <div class="form-row">
-        <div class="form-group"><label>Token</label><input id="vt-token" placeholder="Paste token here"></div>
-      </div>
-      <button class="btn" onclick="verifyToken()">Verify</button>
-      <div id="vt-result" style="margin-top:12px;display:none;"></div>
+      <h3>⚡ Inference Cluster</h3>
+      <div id="net-cluster">Loading...</div>
     </div>
   </div>
 </div>
 
 <script>
-let refreshInterval;
+let BASE = '';
+const token = localStorage.getItem('netai_token') || '';
+
+async function api(path, opts = {}) {
+  const headers = {'Content-Type': 'application/json', ...opts.headers};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  try {
+    const r = await fetch(BASE + path, {...opts, headers});
+    if (r.status === 401) return {error: 'Auth required. Run: netai auth register then login'};
+    const ct = r.headers.get('content-type') || '';
+    return ct.includes('json') ? r.json() : {status: r.status, text: await r.text().catch(()=>'')};
+  } catch(e) { return {error: 'Connection failed: ' + e.message}; }
+}
+
+function toast(msg, type='info') {
+  const el = document.createElement('div');
+  el.style.cssText = 'padding:12px 20px;border-radius:6px;margin-bottom:8px;font-size:13px;font-weight:500;animation:fadeIn .3s;max-width:400px';
+  el.style.background = type==='ok'?'#1b4332':type==='err'?'#4c1111':'#0c2d6b';
+  el.style.color = type==='ok'?'#7ee787':type==='err'?'#f85149':'#58a6ff';
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
 
 function showTab(id) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  event.target.classList.add('active');
-  document.getElementById(id).classList.add('active');
-  loadPanel(id);
+  document.querySelector(`.tab[onclick*="${id}"]`)?.classList.add('active');
+  document.getElementById(id)?.classList.add('active');
+  if (id === 'overview') loadOverview();
+  if (id === 'models') loadModels();
+  if (id === 'network') loadNetwork();
 }
 
-function toast(msg, type='info') {
-  const c = document.getElementById('toast-container');
-  const t = document.createElement('div');
-  t.className = 'toast';
-  t.style.borderLeftColor = type === 'ok' ? '#00cc66' : type === 'err' ? '#cc3333' : '#00d2ff';
-  t.style.borderLeft = '3px solid';
-  t.textContent = msg;
-  c.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
+function errCheck(d) { if (d && d.error) { toast(d.error, 'err'); return true; } if (d && d.detail) { toast(d.detail, 'err'); return true; } return false; }
+
+async function loadOverview() {
+  const [status, native, resources] = await Promise.all([
+    api('/api/status'),
+    api('/api/inference/native/status'),
+    api('/api/resources'),
+  ]);
+  const s = status || {};
+  const n = native || {};
+  const r = resources || {};
+  document.getElementById('node-id').textContent = s.node_id || 'unknown';
+  const p = s.profile || r;
+  document.getElementById('ov-stats').innerHTML = `
+    <div class="stat"><div class="value">${n.loaded_models?.length||0}</div><div class="label">Models Loaded</div></div>
+    <div class="stat"><div class="value">${n.num_layers_loaded||0}</div><div class="label">Layers</div></div>
+    <div class="stat"><div class="value">${n.weights_memory_mb?n.weights_memory_mb.toFixed(0):0}</div><div class="label">Memory (MB)</div></div>
+    <div class="stat"><div class="value">${p.cpu_available||'?'}/${p.cpu_cores||'?'}</div><div class="label">CPU Cores</div></div>
+    <div class="stat"><div class="value">${p.gpu_count||0}</div><div class="label">GPUs</div></div>
+    <div class="stat"><div class="value">${(p.ram_available_gb||0).toFixed(1)}/${(p.ram_total_gb||0).toFixed(1)}</div><div class="label">RAM (GB)</div></div>
+    <div class="stat"><div class="value">${s.peer_count||0}</div><div class="label">Peers</div></div>
+  `;
+  document.getElementById('ov-hardware').innerHTML = `<table>
+    <tr><th style="width:200px">CPU</th><td>${p.cpu_available||'?'}/${p.cpu_cores||'?'} cores</td><td>${p.cpu_arch||''}</td></tr>
+    <tr><th>GPU</th><td>${p.gpu_count||0} (${(p.gpu_names||[]).join(', ')||'none'})</td><td>VRAM: ${(p.gpu_available_vram_mb||[]).join('/')||0} MB</td></tr>
+    <tr><th>CUDA</th><td>${p.has_cuda?'✅':'❌'}</td><td>ROCm: ${p.has_rocm?'✅':'❌'} | Vulkan: ${p.has_vulkan?'✅':'❌'}</td></tr>
+    <tr><th>PyTorch</th><td>${p.torch_available?'✅ Available':'❌'}</td><td>Backends: ${(n.backends||[]).join(', ')||'numpy'}</td></tr>
+    <tr><th>Capacity</th><td>Score: ${(p.capacity_score||0).toFixed(1)}</td><td>${p.summary||''}</td></tr>
+  </table>`;
+  document.getElementById('ov-native').innerHTML = `<table>
+    <tr><th style="width:200px">Node ID</th><td>${n.node_id||'-'}</td><td></td></tr>
+    <tr><th>Models</th><td>${(n.loaded_models||[]).join(', ')||'None'}</td><td>${n.num_layers_loaded||0} layers</td></tr>
+    <tr><th>Memory</th><td>${(n.weights_memory_mb||0).toFixed(1)} MB</td><td>Backends: ${(n.backends||[]).join(', ')}</td></tr>
+  </table>`;
 }
 
-async function api(path, opts={}) {
-  try {
-    const r = await fetch(path, opts);
-    return await r.json();
-  } catch(e) { toast('API error: '+e, 'err'); return null; }
+async function loadModels() {
+  const [native, catalog] = await Promise.all([
+    api('/api/inference/native/models'),
+    api('/api/models/catalog'),
+  ]);
+  const n = native || {};
+  const loaded = n.loaded_models || [];
+  const cached = n.cached_models || [];
+  const models = n.status || {};
+  document.getElementById('models-loaded').innerHTML = loaded.length ?
+    loaded.map(m => `<div class="model-card"><div class="model-name">${m}</div><div class="model-meta">Loaded in native engine | ${models.weights_memory_mb?.toFixed(0)||'?'} MB weights</div></div>`).join('') :
+    '<p style="color:#8b949e">No models loaded. Download or load a model to start.</p>';
+  document.getElementById('models-cached').innerHTML = cached.length ?
+    cached.map(m => `<div class="model-card"><div class="model-name">${m}</div><div class="model-meta">Cached locally</div></div>`).join('') :
+    '<p style="color:#8b949e">No cached models.</p>';
+  const cat = catalog || {};
+  const catModels = cat.models || [];
+  document.getElementById('models-catalog').innerHTML = catModels.length ?
+    `<table><tr><th>ID</th><th>Name</th><th>Class</th><th>Params</th><th>Min VRAM</th><th>License</th></tr>` +
+    catModels.map(m => `<tr><td style="color:#58a6ff">${m.model_id}</td><td>${m.name}</td><td><span class="badge badge-info">${m.size_class}</span></td><td>${m.params_m?.toFixed(0)||'?'}M</td><td>${Math.min(...Object.values(m.vram_required_mb||{0:0}))||'?'} MB</td><td>${m.license||'-'}</td></tr>`).join('') + '</table>' :
+    '<p style="color:#8b949e">No catalog models available.</p>';
+  const sel = document.getElementById('gen-model');
+  sel.innerHTML = '<option value="">-- Select a loaded model --</option>' +
+    loaded.map(m => `<option value="${m}">${m}</option>`).join('');
 }
 
-async function loadPanel(id) {
-  if (id === 'overview') {
-    const s = await api('/api/status');
-    if (!s) return;
-    document.getElementById('overview-stats').innerHTML = `
-      <div class="stat"><div class="value">${s.peer_count||0}</div><div class="label">Peers</div></div>
-      <div class="stat"><div class="value">${(s.jobs||[]).length}</div><div class="label">Jobs</div></div>
-      <div class="stat"><div class="value">${s.groups||0}</div><div class="label">Groups</div></div>
-      <div class="stat"><div class="value">${s.proposals||0}</div><div class="label">Proposals</div></div>
-      <div class="stat"><div class="value">${s.pledges||0}</div><div class="label">Pledges</div></div>
-    `;
-    const p = s.profile || {};
-    document.getElementById('sys-status').innerHTML = `
-      <table><tr><th>Property</th><th>Value</th></tr>
-      <tr><td>Node ID</td><td>${s.node_id||'-'}</td></tr>
-      <tr><td>CPU</td><td>${p.cpu_available||0}/${p.cpu_cores||0} cores</td></tr>
-      <tr><td>GPU</td><td>${p.gpu_count||0} (${(p.gpu_names||[]).join(', ')||'none'})</td></tr>
-      <tr><td>RAM</td><td>${(p.ram_available_gb||0).toFixed(1)}/${(p.ram_total_gb||0).toFixed(1)} GB</td></tr>
-      <tr><td>CUDA</td><td>${p.has_cuda?'Yes':'No'}</td></tr>
-      <tr><td>ROCm</td><td>${p.has_rocm?'Yes':'No'}</td></tr>
-      <tr><td>Vulkan</td><td>${p.has_vulkan?'Yes':'No'}</td></tr>
-      <tr><td>PyTorch</td><td>${p.torch_available?'Yes':'No'}</td></tr>
-      </table>
-    `;
-  } else if (id === 'training') {
-    const d = await api('/api/training/jobs');
-    if (!d) return;
-    const jobs = d.jobs || [];
-    document.getElementById('jobs-list').innerHTML = jobs.length === 0 ? '<p style="color:#888">No jobs yet</p>' :
-      '<table><tr><th>Job ID</th><th>Model</th><th>Status</th><th>Step</th><th>Loss</th><th>Elapsed</th></tr>' +
-      jobs.map(j => `<tr><td>${j.job_id}</td><td>${(j.config||{}).model_name||'-'}</td>
-      <td><span class="badge ${j.status}">${j.status}</span></td>
-      <td>${j.step||0}</td><td>${j.loss!=null?j.loss.toFixed(4):'-'}</td>
-      <td>${j.elapsed_s ? Math.round(j.elapsed_s)+'s':'-'}</td></tr>`).join('') +
-      '</table>';
-  } else if (id === 'voting') {
-    const d = await api('/api/vote/proposals');
-    if (!d) return;
-    const ps = d.proposals || [];
-    document.getElementById('proposals-list').innerHTML = ps.length === 0 ? '<p style="color:#888">No proposals yet</p>' :
-      ps.map(p => {
-        const total = p.weighted_for + p.weighted_against;
-        const forPct = total > 0 ? (p.weighted_for/total*100).toFixed(0) : 50;
-        return `<div class="card"><h3>${p.title} <span class="badge ${p.status}">${p.status}</span></h3>
-        <p style="color:#888;font-size:12px">by ${p.proposer_id} &bull; Type: ${p.vote_type} &bull; ID: ${p.proposal_id}</p>
-        <div class="vote-bar"><div class="vote-for" style="width:${forPct}%">${p.weighted_for.toFixed(1)} for</div>
-        <div class="vote-against" style="width:${100-forPct}%">${p.weighted_against.toFixed(1)} against</div></div>
-        <p style="font-size:12px;color:#888">${p.votes_for} votes for, ${p.votes_against} against | Quorum: ${p.quorum} | Threshold: ${p.threshold}</p></div>`;
-      }).join('');
-  } else if (id === 'groups') {
-    const d = await api('/api/groups');
-    if (!d) return;
-    const gs = d.groups || [];
-    document.getElementById('groups-list').innerHTML = gs.length === 0 ? '<p style="color:#888">No groups yet</p>' :
-      '<table><tr><th>ID</th><th>Name</th><th>Visibility</th><th>Members</th><th>Tags</th></tr>' +
-      gs.map(g => `<tr><td>${g.group_id}</td><td>${g.name}</td>
-      <td><span class="badge active">${g.visibility}</span></td>
-      <td>${g.members}</td><td>${(g.tags||[]).join(', ')||'-'}</td></tr>`).join('') + '</table>';
-  } else if (id === 'pledges') {
-    const [cr, lb] = await Promise.all([api('/api/resources/cluster'), api('/api/pledge/leaderboard')]);
-    if (cr) document.getElementById('cluster-resources').innerHTML =
-      `<div class="stats"><div class="stat"><div class="value">${cr.total_cpu_cores||0}</div><div class="label">CPU Cores</div></div>
-      <div class="stat"><div class="value">${cr.total_gpu_count||0}</div><div class="label">GPUs</div></div>
-      <div class="stat"><div class="value">${(cr.total_ram_gb||0).toFixed(0)}</div><div class="label">RAM GB</div></div>
-      <div class="stat"><div class="value">${cr.total_vram_mb||0}</div><div class="label">VRAM MB</div></div>
-      <div class="stat"><div class="value">${cr.num_contributors||0}</div><div class="label">Contributors</div></div></div>`;
-    if (lb) document.getElementById('leaderboard').innerHTML =
-      (lb.leaderboard||[]).length === 0 ? '<p style="color:#888">No pledges yet</p>' :
-      '<table><tr><th>Rank</th><th>User</th><th>Score</th><th>CPU</th><th>GPU</th><th>RAM</th><th>Reputation</th></tr>' +
-      lb.leaderboard.map(l => `<tr><td>#${l.rank}</td><td>${l.user_id}</td><td>${l.score.toFixed(1)}</td>
-      <td>${l.cpu}</td><td>${l.gpu}</td><td>${l.ram_gb.toFixed(0)}</td><td>${l.reputation.toFixed(1)}</td></tr>`).join('') + '</table>';
-  } else if (id === 'peers') {
-    const d = await api('/api/peers');
-    if (!d) return;
-    document.getElementById('peers-list').innerHTML =
-      (d.peers||[]).length === 0 ? '<p style="color:#888">No peers connected</p>' :
-      '<table><tr><th>Node ID</th><th>Host</th><th>State</th><th>CPU</th><th>GPU</th><th>RAM</th></tr>' +
-      d.peers.map(p => `<tr><td>${p.node_id}</td><td>${p.host}:${p.port}</td>
-      <td><span class="badge ${p.state}">${p.state}</span></td>
-      <td>${p.cpu_avail}/${p.cpu_cores}</td><td>${p.gpu_avail}/${p.gpu_count}</td>
-       <td>${(p.ram_avail_gb||0).toFixed(1)}GB</td></tr>`).join('') + '</table>';
-  } else if (id === 'inference') {
-    const d = await api('/api/inference/status');
-    if (d) {
-      const local = d.local || {};
-      const cluster = d.cluster || {};
-      document.getElementById('inf-status').innerHTML =
-        `<div class="stats"><div class="stat"><div class="value">${local.models_loaded||0}</div><div class="label">Local Models</div></div>
-        <div class="stat"><div class="value">${(cluster.total_inferences||0)}</div><div class="label">Total Inferences</div></div>
-        <div class="stat"><div class="value">${(cluster.available_nodes||0)}</div><div class="label">Available Nodes</div></div></div>`;
-    }
-  } else if (id === 'jackin') {
-    const [sr, cr] = await Promise.all([api('/api/status'), api('/api/resources/cluster')]);
-    if (sr && cr) {
-      const p = sr.profile || {};
-      document.getElementById('ji-network').innerHTML =
-        `<div class="stats"><div class="stat"><div class="value">${p.cpu_available||0}</div><div class="label">CPU Available</div></div>
-        <div class="stat"><div class="value">${p.gpu_available||0}</div><div class="label">GPU Available</div></div>
-        <div class="stat"><div class="value">${(p.ram_available_gb||0).toFixed(1)}GB</div><div class="label">RAM Available</div></div>
-        <div class="stat"><div class="value">${cr.total_cpu_cores||0}</div><div class="label">Cluster CPU</div></div>
-        <div class="stat"><div class="value">${cr.total_gpu_count||0}</div><div class="label">Cluster GPU</div></div></div>`;
-    }
-  } else if (id === 'gradients') {
-    const r = await api('/api/training/gradient-status');
-    if (r) {
-      let html = `<div class="stats"><div class="stat"><div class="value">${r.peers||0}</div><div class="label">Sync Peers</div></div>`;
-      const jobs = Object.keys(r.gradient_store || {});
-      html += `<div class="stat"><div class="value">${jobs.length}</div><div class="label">Jobs with Gradients</div></div>`;
-      html += `<div class="stat"><div class="value">${r.running?'Yes':'No'}</div><div class="label">Running</div></div></div>`;
-      if (jobs.length > 0) {
-        html += '<table><tr><th>Job</th><th>Steps</th><th>Latest Agg. Step</th></tr>';
-        for (const [jid, info] of Object.entries(r.gradient_store)) {
-          html += `<tr><td>${jid}</td><td>${(info.steps_available||[]).join(', ')}</td><td>${info.aggregated_step||'-'}</td></tr>`;
-        }
-        html += '</table>';
-      } else {
-        html += '<p style="color:#888">No gradient data yet</p>';
-      }
-      document.getElementById('gs-status').innerHTML = html;
-    }
-  } else if (id === 'metrics') {
-    const r = await fetch('/api/metrics');
-    const text = await r.text();
-    document.getElementById('metrics-content').textContent = text;
-  }
-}
-
-async function submitTraining() {
-  const body = {
-    model_name: document.getElementById('t-model').value,
-    model_architecture: document.getElementById('t-arch').value,
-    hidden_size: +document.getElementById('t-hidden').value,
-    num_layers: +document.getElementById('t-layers').value,
-    total_steps: +document.getElementById('t-steps').value,
-    batch_size: +document.getElementById('t-batch').value,
-    learning_rate: +document.getElementById('t-lr').value,
-    device_preference: document.getElementById('t-device').value,
-    group_id: document.getElementById('t-group').value,
-  };
-  const r = await api('/api/training/submit', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast('Job submitted: '+r.job_id, 'ok'); loadPanel('training'); }
-}
-
-async function proposeModel() {
-  const body = {
-    model_name: document.getElementById('v-model').value,
-    architecture: document.getElementById('v-arch').value,
-    description: document.getElementById('v-desc').value,
-    proposer_id: document.getElementById('v-proposer').value,
-    group_id: document.getElementById('v-group').value,
-  };
-  const r = await api('/api/vote/propose-model', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast('Proposal created: '+r.proposal_id, 'ok'); loadPanel('voting'); }
-}
-
-async function castVote() {
-  const body = {
-    proposal_id: document.getElementById('cv-proposal').value,
-    voter_id: document.getElementById('cv-voter').value,
-    choice: document.getElementById('cv-choice').value,
-  };
-  const r = await api('/api/vote/cast', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast('Vote cast (weight: '+r.weight.toFixed(2)+')', 'ok'); loadPanel('voting'); }
-}
-
-async function createGroup() {
-  const body = {
-    name: document.getElementById('g-name').value,
-    owner_id: document.getElementById('g-owner').value,
-    description: document.getElementById('g-desc').value,
-    visibility: document.getElementById('g-vis').value,
-    max_members: +document.getElementById('g-max').value,
-    require_approval: document.getElementById('g-approval').value === 'true',
-    passphrase: document.getElementById('g-pass').value,
-  };
-  const r = await api('/api/group/create', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast('Group created: '+r.group_id, 'ok'); loadPanel('groups'); }
-}
-
-async function joinGroup() {
-  const body = {
-    group_id: document.getElementById('jg-id').value,
-    user_id: document.getElementById('jg-user').value,
-    invite_code: document.getElementById('jg-invite').value,
-    cpu_cores: +document.getElementById('jg-cpu').value,
-    gpu_count: +document.getElementById('jg-gpu').value,
-    ram_gb: +document.getElementById('jg-ram').value,
-  };
-  const r = await api('/api/group/join', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast(r.message, 'ok'); loadPanel('groups'); }
-}
-
-async function pledgeResources() {
-  const body = {
-    user_id: document.getElementById('p-user').value,
-    node_id: document.getElementById('p-node').value,
-    cpu_cores: +document.getElementById('p-cpu').value,
-    gpu_count: +document.getElementById('p-gpu').value,
-    ram_gb: +document.getElementById('p-ram').value,
-    time_hours: +document.getElementById('p-time').value,
-    group_id: document.getElementById('p-group').value,
-  };
-  const r = await api('/api/pledge', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast('Pledged! Score: '+r.score.toFixed(1)+' - '+r.summary, 'ok'); loadPanel('pledges'); }
-}
-
-async function loadModel() {
-  const body = {
-    model_id: document.getElementById('inf-model').value,
-    model_name: document.getElementById('inf-model').value,
-    version: document.getElementById('inf-version').value,
-    num_shards: +document.getElementById('inf-shards').value,
-    device: document.getElementById('inf-device').value,
-    mirror_enabled: document.getElementById('inf-mirror').value === 'true',
-    group_id: document.getElementById('inf-group').value,
-  };
-  const r = await api('/api/inference/load', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) { toast('Model loaded: '+r.model_id+' (shards: '+r.shards+')', 'ok'); loadPanel('inference'); }
-}
-
-async function runInference() {
-  const out = document.getElementById('inf-output');
+async function generateNative() {
+  const model = document.getElementById('gen-model').value;
+  const prompt = document.getElementById('gen-prompt').value;
+  if (!model) { toast('Select a model first', 'err'); return; }
+  if (!prompt) { toast('Enter a prompt', 'err'); return; }
+  const btn = document.getElementById('gen-btn');
+  const out = document.getElementById('gen-output');
+  const meta = document.getElementById('gen-meta');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating...';
+  out.className = 'output-box';
+  out.style.display = 'none';
+  meta.style.display = 'none';
+  const t0 = Date.now();
+  const data = await api('/api/inference/native-run', {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + (localStorage.getItem('netai_token')||'')},
+    body: JSON.stringify({model_id: model, prompt, max_tokens: parseInt(document.getElementById('gen-max-tokens').value)||64, temperature: parseFloat(document.getElementById('gen-temp').value)||0.7, top_p: parseFloat(document.getElementById('gen-topp').value)||0.9})
+  });
+  btn.disabled = false;
+  btn.innerHTML = '⚡ Generate';
+  if (errCheck(data)) return;
+  const elapsed = ((Date.now()-t0)/1000).toFixed(2);
+  out.className = 'output-box visible';
   out.style.display = 'block';
-  out.textContent = 'Generating...';
-  const body = {
-    model_id: document.getElementById('inf-run-model').value,
-    prompt: document.getElementById('inf-prompt').value,
-    max_tokens: +document.getElementById('inf-max-tokens').value,
-    temperature: +document.getElementById('inf-temp').value,
-  };
-  const r = await api('/api/inference/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) {
-    out.textContent = r.text || r.error || JSON.stringify(r, null, 2);
-    if (r.tokens_per_second) out.textContent += '\\n\\nSpeed: ' + r.tokens_per_second.toFixed(1) + ' tok/s | Latency: ' + r.latency_ms.toFixed(0) + 'ms';
+  if (data.error) {
+    out.className = 'output-box visible error';
+    out.textContent = 'Error: ' + data.error;
+  } else {
+    const genTokens = data.generated_tokens || [];
+    const text = data.text || `[${genTokens.length} tokens generated]`;
+    out.textContent = text;
+    meta.style.display = 'flex';
+    meta.innerHTML = `
+      <span>⏱ ${data.latency_ms?.toFixed(0) || elapsed*1000}ms</span>
+      <span>🚀 ${data.tokens_per_second?.toFixed(1) || (genTokens.length/(elapsed||1)).toFixed(1)} tok/s</span>
+      <span>📝 ${genTokens.length || data.num_generated || 0} tokens</span>
+      <span>🔢 Prompt: ${data.prompt_tokens?.length || 0} tokens</span>
+      ${data.num_stages ? `<span>🔀 ${data.num_stages} stages</span>` : ''}
+    `;
   }
 }
 
-async function jackIn() {
-  const jiResult = document.getElementById('ji-result');
-  jiResult.style.display = 'block';
-  jiResult.innerHTML = '<em>Jacking in...</em>';
-  const models = document.getElementById('ji-models').value.split(',').map(s=>s.trim()).filter(Boolean);
-  const body = {
-    user_id: document.getElementById('ji-user').value,
-    mode: document.getElementById('ji-mode').value,
-    cpu_cores: +document.getElementById('ji-cpu').value,
-    gpu_count: +document.getElementById('ji-gpu').value,
-    ram_gb: +document.getElementById('ji-ram').value,
-    time_hours: +document.getElementById('ji-hours').value,
-    group_id: document.getElementById('ji-group').value,
-    models_to_serve: models,
-  };
-  const r = await api('/api/jack-in', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  if (r) {
-    let html = '<h4 style="color:#00d2ff">Jacked In!</h4>';
-    html += '<p>Modes: <b>' + r.modes.join(' + ') + '</b></p>';
-    if (r.pledge_score) html += '<p>Training pledge score: <b>' + r.pledge_score.toFixed(1) + '</b> (' + r.pledge_summary + ')</p>';
-    if (r.group_joined) html += '<p>Joined group: <b>' + r.group_joined + '</b></p>';
-    if (r.profile) html += '<p>Profile: CPU ' + r.profile.cpu + ' | GPU ' + r.profile.gpu + ' | RAM ' + r.profile.ram + '</p>';
-    jiResult.innerHTML = html;
-    toast('Jacked in! Modes: ' + r.modes.join(', '), 'ok');
+async function loadLocalModel() {
+  const dir = document.getElementById('ll-dir')?.value || '';
+  const mid = document.getElementById('ll-modelid')?.value || '';
+  if (!dir && !document.getElementById('gen-model').value) { toast('Enter directory path or select a model', 'err'); return; }
+  const model = mid || document.getElementById('gen-model').value;
+  const layerStart = parseInt(document.getElementById('ll-layer-start')?.value) || -1;
+  const layerEnd = parseInt(document.getElementById('ll-layer-end')?.value) || -1;
+  let url = `/api/inference/load-local?model_dir=${encodeURIComponent(dir)}&model_id=${encodeURIComponent(model)}`;
+  if (layerStart >= 0) url += `&layer_start=${layerStart}`;
+  if (layerEnd >= 0) url += `&layer_end=${layerEnd}`;
+  const data = await api(url, {method: 'POST'});
+  if (errCheck(data)) return;
+  toast(`Model ${data.model_id} loaded: ${data.loaded_layers} layers, ${data.memory_mb?.toFixed(1)} MB`, 'ok');
+  loadModels();
+}
+
+async function downloadModel() {
+  const modelId = document.getElementById('dl-model').value.trim();
+  const revision = document.getElementById('dl-revision').value.trim() || 'main';
+  if (!modelId) { toast('Enter a model ID', 'err'); return; }
+  const btn = document.getElementById('dl-btn');
+  const out = document.getElementById('dl-output');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Downloading...';
+  out.className = 'output-box';
+  out.style.display = 'none';
+  const data = await api(`/api/inference/download/${encodeURIComponent(modelId)}?revision=${encodeURIComponent(revision)}`, {method:'POST'});
+  btn.disabled = false;
+  btn.innerHTML = '📥 Download & Load';
+  out.className = 'output-box visible';
+  out.style.display = 'block';
+  if (data.error) {
+    out.className = 'output-box visible error';
+    out.textContent = 'Error: ' + data.error;
+    toast('Download failed: ' + data.error, 'err');
+  } else {
+    out.textContent = `✅ Model: ${data.model_id}\nLayers: ${data.loaded_layers}\nMemory: ${data.memory_mb?.toFixed(1)} MB\nFiles: ${data.files_downloaded}\nSize: ${data.total_size_mb?.toFixed(1)} MB\nVerified: ${data.verified}`;
+    toast(`Downloaded ${data.model_id}: ${data.loaded_layers} layers`, 'ok');
+    loadModels();
   }
 }
 
-loadPanel('overview');
-refreshInterval = setInterval(() => {
-  const active = document.querySelector('.panel.active');
-  if (active) loadPanel(active.id);
-}, 10000);
-
-// Gradient Sync Functions
-async function addGradientPeer() {
-  const nodeId = document.getElementById('gs-peer-id').value;
-  const endpoint = document.getElementById('gs-peer-ep').value;
-  if (!nodeId || !endpoint) { toast('Enter peer ID and endpoint', 'err'); return; }
-  const r = await api(`/api/training/gradient-peer?node_id=${encodeURIComponent(nodeId)}&endpoint=${encodeURIComponent(endpoint)}`, {method:'POST'});
-  if (r) { toast('Peer added: ' + nodeId, 'ok'); loadPanel('gradients'); }
-}
-
-async function aggregateGradients() {
-  const jobId = document.getElementById('gs-job').value;
-  const step = document.getElementById('gs-step').value;
-  if (!jobId) { toast('Enter Job ID', 'err'); return; }
-  const r = await api(`/api/training/gradient-aggregate/${jobId}/${step}`, {method:'POST'});
-  if (r) { toast('Aggregated: ' + (r.layers||0) + ' layers', 'ok'); }
-}
-
-async function pushGradients() {
-  const jobId = document.getElementById('gs-job').value;
-  const step = document.getElementById('gs-step').value;
-  if (!jobId) { toast('Enter Job ID', 'err'); return; }
-  const r = await api(`/api/training/gradient-push/${jobId}/${step}`, {method:'POST'});
-  if (r) { toast('Push: ' + r.status, 'ok'); }
-}
-
-async function pullGradients() {
-  const jobId = document.getElementById('gs-job').value;
-  const step = document.getElementById('gs-step').value;
-  if (!jobId) { toast('Enter Job ID', 'err'); return; }
-  const r = await api(`/api/training/gradient-pull/${jobId}/${step}`);
-  if (r && r.gradients) {
-    let html = '<table><tr><th>Layer</th><th>Shape</th><th>Mean</th><th>Std</th><th>Norm</th></tr>';
-    for (const [layer, g] of Object.entries(r.gradients)) {
-      html += `<tr><td>${layer}</td><td>${g.shape.join('x')}</td><td>${g.mean.toFixed(4)}</td><td>${g.std.toFixed(4)}</td><td>${g.norm.toFixed(2)}</td></tr>`;
+async function planPipeline() {
+  const model = document.getElementById('pipe-model').value.trim();
+  const vram = parseInt(document.getElementById('pipe-vram').value) || 8192;
+  if (!model) { toast('Enter model ID', 'err'); return; }
+  const data = await api(`/api/inference/pipeline/plan?model_id=${encodeURIComponent(model)}`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify([{node_id: 'local', vram_available_mb: vram}])
+  });
+  const out = document.getElementById('pipe-output');
+  out.className = 'output-box visible';
+  out.style.display = 'block';
+  if (data.error || data.detail) {
+    out.className = 'output-box visible error';
+    out.textContent = 'Error: ' + (data.error || data.detail);
+  } else {
+    let html = `Model: ${data.model_id}\nTotal stages: ${data.total_stages}\n\n`;
+    for (const s of data.stages || []) {
+      html += `Stage ${s.stage_index}: layers ${s.layer_start}-${s.layer_end} (${s.num_layers} layers) | ${s.vram_mb?.toFixed(0)}MB | ${s.node_id} | ${s.status}\n`;
     }
-    html += '</table>';
-    document.getElementById('gs-status').innerHTML = html;
-  } else {
-    toast('No gradients found', 'err');
+    out.textContent = html;
   }
+  const ps = await api(`/api/inference/pipeline/status?model_id=${encodeURIComponent(model)}`);
+  document.getElementById('pipe-status').innerHTML = ps.error ?
+    `<p style="color:#8b949e">${ps.error}</p>` :
+    `<pre style="color:#7ee787;font-family:monospace;font-size:13px">${JSON.stringify(ps, null, 2)}</pre>`;
 }
 
-// Metrics Functions
-async function loadMetrics() {
-  const r = await fetch('/api/metrics');
-  const text = await r.text();
-  document.getElementById('metrics-content').textContent = text;
+async function loadNetwork() {
+  const [status, inf] = await Promise.all([api('/api/status'), api('/api/inference/status')]);
+  const s = status || {};
+  const i = inf || {};
+  const local = i.local || {};
+  const cluster = i.cluster || {};
+  document.getElementById('net-status').innerHTML = `<table>
+    <tr><th style="width:200px">Node</th><td>${s.node_id||'-'}</td><td><span class="badge badge-info">${s.state||'-'}</span></td></tr>
+    <tr><th>Peers</th><td>${s.peer_count||0}</td><td></td></tr>
+    <tr><th>Jobs</th><td>${(s.jobs||[]).length}</td><td></td></tr>
+    <tr><th>Groups</th><td>${s.groups||0}</td><td></td></tr>
+    <tr><th>Proposals</th><td>${s.proposals||0}</td><td></td></tr>
+  </table>`;
+  document.getElementById('net-cluster').innerHTML = `<table>
+    <tr><th style="width:200px">Strategy</th><td>${cluster.strategy||'-'}</td><td></td></tr>
+    <tr><th>Total Nodes</th><td>${cluster.total_nodes||0}</td><td>Available: ${cluster.available_nodes||0}</td></tr>
+    <tr><th>Models</th><td>${local.models_loaded||0}</td><td>Total inferences: ${local.total_inferences||0}</td></tr>
+    <tr><th>Inferences</th><td>${local.total_inferences||0}</td><td></td></tr>
+  </table>`;
 }
 
-// Auth Functions
-async function createAuthToken() {
-  const userId = document.getElementById('at-user').value;
-  const ttl = parseFloat(document.getElementById('at-ttl').value);
-  const r = await api('/api/auth/token', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id: userId, scopes: ['read','write'], ttl_hours: ttl})});
-  if (r) {
-    const el = document.getElementById('at-result');
-    el.style.display = 'block';
-    el.innerHTML = '<div class="card"><p>Token: <code style="word-break:break-all;color:#00ff88">' + r.token + '</code></p><p>Expires: ' + r.expires_in_hours + ' hours | Scopes: ' + r.scopes.join(', ') + '</p></div>';
-    toast('Token created!', 'ok');
-  }
-}
-
-async function createApiKey() {
-  const userId = document.getElementById('ak-user').value;
-  const name = document.getElementById('ak-name').value;
-  const r = await api('/api/auth/api-key', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id: userId, name: name, scopes: ['read','write']})});
-  if (r) {
-    const el = document.getElementById('ak-result');
-    el.style.display = 'block';
-    el.innerHTML = '<div class="card"><p>API Key: <code style="word-break:break-all;color:#00ff88">' + r.api_key + '</code></p><p>Name: ' + r.name + ' | Scopes: ' + r.scopes.join(', ') + '</p></div>';
-    toast('API key created!', 'ok');
-  }
-}
-
-async function verifyToken() {
-  const token = document.getElementById('vt-token').value;
-  if (!token) { toast('Enter a token', 'err'); return; }
-  const r = await api(`/api/auth/verify?token=${encodeURIComponent(token)}`);
-  const el = document.getElementById('vt-result');
-  el.style.display = 'block';
-  if (r && r.valid) {
-    el.innerHTML = '<div class="card" style="border-color:#00cc66"><p style="color:#00cc66">Valid Token</p><p>User: ' + r.user_id + '</p><p>Scopes: ' + r.scopes.join(', ') + '</p></div>';
-  } else {
-    el.innerHTML = '<div class="card" style="border-color:#cc3333"><p style="color:#cc3333">Invalid or expired token</p></div>';
-  }
-}
+loadOverview();
 </script>
 </body>
 </html>"""
