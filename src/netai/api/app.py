@@ -1518,9 +1518,14 @@ async function loadOverview() {
   </table>`;
   document.getElementById('ov-native').innerHTML = `<table>
     <tr><th style="width:200px">Node ID</th><td>${n.node_id||'-'}</td><td></td></tr>
-    <tr><th>Models</th><td>${(n.loaded_models||[]).join(', ')||'None'}</td><td>${n.num_layers_loaded||0} layers</td></tr>
+    <tr><th>Models</th><td>${(n.loaded_models||[]).join(', ')||'None — <a href="javascript:showTab(\\'download\\')">download a model</a>'}</td><td>${n.num_layers_loaded||0} layers</td></tr>
     <tr><th>Memory</th><td>${(n.weights_memory_mb||0).toFixed(1)} MB</td><td>Backends: ${(n.backends||[]).join(', ')}</td></tr>
   </table>`;
+  const sel = document.getElementById('gen-model');
+  if (sel && (n.loaded_models||[]).length > 0 && sel.options.length <= 1) {
+    sel.innerHTML = '<option value="">-- Select a loaded model --</option>' +
+      (n.loaded_models||[]).map(m => `<option value="${m}">${m}</option>`).join('');
+  }
 }
 
 async function loadModels() {
@@ -1684,6 +1689,7 @@ async function loadNetwork() {
 }
 
 loadOverview();
+loadModels();
 </script>
 </body>
 </html>"""
