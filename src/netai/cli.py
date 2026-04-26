@@ -382,6 +382,75 @@ def cmd_inference(args):
         for mid in models:
             det = details.get(mid, {})
             print(f"{mid:<30} {det.get('version', '-'):<12} {det.get('shards', '-'):<8}")
+    elif args.action == "download":
+        if not args.model:
+            print("Error: --model required (e.g. gpt2, facebook/opt-125m)")
+            return
+        r = _post(f"/api/inference/download/{args.model}")
+        if _err(r):
+            return
+        print(f"  Model:       {r.get('model_id', '-')}")
+        print(f"  Layers:      {r.get('loaded_layers', 0)}")
+        print(f"  Memory:      {r.get('memory_mb', 0):.1f} MB")
+        print(f"  Files:       {r.get('files_downloaded', 0)}")
+        print(f"  Size:        {r.get('total_size_mb', 0):.1f} MB")
+        print(f"  Verified:    {r.get('verified', False)}")
+    elif args.action == "native-run":
+        if not args.model:
+            print("Error: --model required")
+            return
+        data = {
+            "model_id": args.model,
+            "prompt": args.prompt or "",
+            "max_tokens": args.max_tokens or 64,
+            "temperature": args.temperature or 0.7,
+            "top_p": args.top_p or 0.9,
+        }
+        r = _post("/api/inference/native-run", data)
+        if _err(r):
+            return
+        if "error" in r:
+            print(f"Error: {r['error']}")
+        else:
+            gen = r.get("generated_tokens", [])
+            prompt = r.get("prompt_tokens", [])
+            print(f"  Prompt tokens: {len(prompt)}")
+            print(f"  Generated:     {len(gen)} tokens")
+            print(f"  Latency:       {r.get('total_latency_ms', 0):.1f}ms")
+            print(f"  Speed:         {r.get('tokens_per_second', 0):.1f} tok/s")
+            if r.get("num_stages"):
+                print(f"  Stages:        {r.get('num_stages')}")
+    elif args.action == "native-status":
+        d = _get("/api/inference/native/status")
+        if _err(d):
+            return
+        print(f"  Node:          {d.get('node_id', '-')}")
+        print(f"  Models loaded: {d.get('loaded_models', [])}")
+        print(f"  Layers:        {d.get('num_layers_loaded', 0)}")
+        print(f"  Weights:       {d.get('weights_memory_mb', 0):.1f} MB")
+        print(f"  Backends:      {', '.join(d.get('backends', []))}")
+    elif args.action == "native-models":
+        d = _get("/api/inference/native/models")
+        if _err(d):
+            return
+        loaded = d.get("loaded_models", [])
+        cached = d.get("cached_models", [])
+        print(f"  Loaded:  {loaded or 'none'}")
+        print(f"  Cached:   {cached or 'none'}")
+    elif args.action == "pipeline-plan":
+        if not args.model:
+            print("Error: --model required")
+            return
+        data = [{"node_id": "local", "vram_available_mb": args.vram or 8192}]
+        r = _post(f"/api/inference/pipeline/plan?model_id={args.model}", data)
+        if _err(r):
+            return
+        stages = r.get("stages", [])
+        print(f"  Pipeline: {r.get('total_stages', 0)} stages for {r.get('model_id', '-')}")
+        for s in stages:
+            print(f"    Stage {s.get('stage_index', 0)}: node={s.get('node_id', '-')} "
+                  f"layers={s.get('layer_start', 0)}-{s.get('layer_end', 0)} "
+                  f"vram={s.get('vram_mb', 0):.0f}MB status={s.get('status', '-')}")
 
 
 def cmd_jackin(args):
@@ -848,7 +917,9 @@ def main():
     p_group.add_argument("--ram", type=float, default=0)
 
     p_inf = sub.add_parser("inference", help="Distributed inference")
-    p_inf.add_argument("action", choices=["load", "run", "unload", "status", "models"])
+    p_inf.add_argument("action", choices=["load", "run", "unload", "status", "models",
+                                          "download", "native-run", "native-status",
+                                          "native-models", "pipeline-plan"])
     p_inf.add_argument("--model", default="")
     p_inf.add_argument("--name", default="")
     p_inf.add_argument("--prompt", default="")
@@ -860,6 +931,7 @@ def main():
     p_inf.add_argument("--device", default="auto")
     p_inf.add_argument("--mirror", default="true")
     p_inf.add_argument("--verbose", action="store_true")
+    p_inf.add_argument("--vram", type=float, default=8192, help="VRAM in MB for pipeline planning")
 
     p_jack = sub.add_parser("jackin", help="Jack into the network")
     p_jack.add_argument("--user", default="")

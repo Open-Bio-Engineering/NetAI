@@ -2,7 +2,7 @@
 
 Each node loads a contiguous range of transformer layers. Activations flow
 through the pipeline: Node 0 → Node 1 → ... → Node N. This is the core
-that makes "Ollama without a datacenter" work — a 700B model that needs
+that makes distributed AI inference work — a 700B model that needs
 1.4TB of VRAM can run across 50 home GPUs with 28GB each.
 """
 

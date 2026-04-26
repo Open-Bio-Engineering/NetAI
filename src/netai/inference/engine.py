@@ -16,6 +16,10 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
+from netai.inference.native_engine import NativeInferenceEngine, TransformerConfig
+from netai.inference.pipeline_executor import PipelineExecutor, PipelineResult
+from netai.inference.downloader import ModelDownloader, ModelDownload
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,6 +163,9 @@ class InferenceEngine:
         self._inference_task: asyncio.Task | None = None
         self._running = False
         self._lock = asyncio.Lock()
+        self._native_engine: NativeInferenceEngine | None = None
+        self._pipeline_executor: PipelineExecutor | None = None
+        self._model_downloader: ModelDownloader | None = None
         os.makedirs(cache_dir, exist_ok=True)
 
     async def start(self):
@@ -456,7 +463,142 @@ class InferenceEngine:
             "models": models_info,
             "total_inferences": len(self.metrics_history),
             "cache_dir": self.cache_dir,
+            "native_engine": self._native_engine.get_status() if self._native_engine else None,
+            "pipeline_executor": bool(self._pipeline_executor),
         }
+
+    def get_native_engine(self) -> NativeInferenceEngine:
+        if self._native_engine is None:
+            self._native_engine = NativeInferenceEngine(node_id=self.node_id)
+        return self._native_engine
+
+    def get_pipeline_executor(self) -> PipelineExecutor:
+        if self._pipeline_executor is None:
+            self._pipeline_executor = PipelineExecutor(local_engine=self.get_native_engine())
+        return self._pipeline_executor
+
+    def get_model_downloader(self) -> ModelDownloader:
+        if self._model_downloader is None:
+            self._model_downloader = ModelDownloader(cache_dir=os.path.join(self.cache_dir, "models"))
+        return self._model_downloader
+
+    async def download_and_load_model(
+        self,
+        model_id: str,
+        revision: str = "main",
+        file_patterns: list[str] | None = None,
+        layer_start: int = -1,
+        layer_end: int = -1,
+    ) -> dict[str, Any]:
+        """Download model weights from HuggingFace and load into native engine."""
+        downloader = self.get_model_downloader()
+        result = await downloader.download_model(model_id, revision=revision, file_patterns=file_patterns)
+        if not result.files:
+            return {"error": f"Download failed for {model_id}", "model_id": model_id}
+
+        model_dir = os.path.dirname(next(iter(result.files.values())))
+        engine = self.get_native_engine()
+        shard = engine.load_model(model_id, model_dir, layer_start=layer_start, layer_end=layer_end)
+
+        config = ModelServeConfig(
+            model_id=model_id,
+            model_name=model_id,
+            version=revision,
+        )
+        self.models[model_id] = config
+        if model_id not in self._model_weights:
+            self._model_weights[model_id] = {}
+
+        replica = ModelReplica(
+            model_id=model_id,
+            version=revision,
+            node_id=self.node_id,
+            status=InferenceStatus.READY,
+        )
+        replica.loaded_at = time.time()
+        self.replicas.setdefault(model_id, {})[replica.replica_id] = replica
+
+        return {
+            "model_id": model_id,
+            "shard": shard.model_dump(),
+            "loaded_layers": shard.num_layers,
+            "memory_mb": shard.memory_mb,
+            "files_downloaded": len(result.files),
+            "total_size_mb": round(result.size_mb, 1),
+            "verified": result.verified,
+            "config": result.config,
+        }
+
+    def load_local_model(
+        self,
+        model_id: str,
+        model_dir: str,
+        layer_start: int = -1,
+        layer_end: int = -1,
+    ) -> dict[str, Any]:
+        """Load model weights from a local directory into native engine."""
+        engine = self.get_native_engine()
+        shard = engine.load_model(model_id, model_dir, layer_start=layer_start, layer_end=layer_end)
+
+        config = ModelServeConfig(model_id=model_id, model_name=model_id)
+        self.models[model_id] = config
+        if model_id not in self._model_weights:
+            self._model_weights[model_id] = {}
+
+        replica = ModelReplica(
+            model_id=model_id,
+            node_id=self.node_id,
+            status=InferenceStatus.READY,
+        )
+        replica.loaded_at = time.time()
+        self.replicas.setdefault(model_id, {})[replica.replica_id] = replica
+
+        return {
+            "model_id": model_id,
+            "shard": shard.model_dump(),
+            "loaded_layers": shard.num_layers,
+            "memory_mb": shard.memory_mb,
+        }
+
+    async def native_infer(
+        self,
+        model_id: str,
+        prompt_tokens: list[int],
+        max_tokens: int = 64,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+    ) -> dict[str, Any]:
+        """Run inference using the native engine (local or pipeline-parallel)."""
+        engine = self.get_native_engine()
+        if model_id not in engine._loaded_models:
+            return {"error": f"Model {model_id} not loaded in native engine"}
+
+        config = engine.configs.get(model_id)
+        if config is None:
+            return {"error": f"No config for {model_id}"}
+
+        pipeline = self.get_pipeline_executor()
+        if model_id in pipeline.pipelines:
+            result = await pipeline.generate_autoregressive(
+                model_id=model_id,
+                prompt_tokens=prompt_tokens,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
+            return result.model_dump()
+
+        result = engine.generate(
+            model_id=model_id,
+            prompt_tokens=prompt_tokens,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+        )
+        return result
 
 
 class ModelMirror:

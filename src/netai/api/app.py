@@ -37,6 +37,9 @@ from netai.inference.engine import (
 from netai.inference.router import InferenceLoadBalancer, InferenceGateway, InferenceNode, RoutingStrategy
 from netai.inference.kv_cache import KVCacheManager, DistributedKVCache
 from netai.inference.autoloader import AutoLoader, ModelEntry, ModelRegistry, ModelSizeClass
+from netai.inference.native_engine import NativeInferenceEngine, TransformerConfig
+from netai.inference.pipeline_executor import PipelineExecutor
+from netai.inference.downloader import ModelDownloader
 from netai.training.engine import GradientSyncServer
 from netai.security import (
     SecurityMiddleware, AuthDependency, Scope, UserRole, InputValidator,
@@ -680,6 +683,88 @@ def create_app(
     async def inference_register_node(node: InferenceNode, identity=Depends(AuthDependency(sec, required_scope=Scope.INFERENCE.value))):
         inf_lb.register_node(node)
         return {"status": "ok", "node_id": node.node_id}
+
+    @app.post("/api/inference/download/{model_id}")
+    async def inference_download_model(model_id: str, revision: str = "main"):
+        result = await inf_engine.download_and_load_model(model_id, revision=revision)
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+
+    @app.post("/api/inference/load-local")
+    async def inference_load_local(model_dir: str, model_id: str = "", layer_start: int = -1, layer_end: int = -1):
+        if not model_id:
+            model_id = os.path.basename(model_dir.rstrip("/"))
+        if not os.path.isdir(model_dir):
+            raise HTTPException(400, f"Directory not found: {model_dir}")
+        result = inf_engine.load_local_model(model_id, model_dir, layer_start=layer_start, layer_end=layer_end)
+        return result
+
+    @app.post("/api/inference/native-run")
+    async def inference_native_run(req: InferenceRunRequest, identity=Depends(AuthDependency(sec, required_scope=Scope.INFERENCE.value))):
+        validator.validate_prompt(req.prompt)
+        prompt_tokens = [ord(c) % inf_engine.get_native_engine().configs.get(req.model_id, TransformerConfig()).vocab_size for c in req.prompt]
+        if not prompt_tokens:
+            prompt_tokens = [0]
+        result = await inf_engine.native_infer(
+            model_id=req.model_id,
+            prompt_tokens=prompt_tokens,
+            max_tokens=req.max_tokens,
+            temperature=req.temperature,
+            top_p=req.top_p,
+            top_k=50,
+        )
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        return result
+
+    @app.get("/api/inference/native/status")
+    async def inference_native_status():
+        engine = inf_engine.get_native_engine()
+        return engine.get_status()
+
+    @app.get("/api/inference/native/models")
+    async def inference_native_models():
+        engine = inf_engine.get_native_engine()
+        downloader = inf_engine.get_model_downloader()
+        cached = downloader.list_cached_models()
+        return {
+            "loaded_models": list(engine._loaded_models),
+            "cached_models": cached,
+            "status": engine.get_status(),
+        }
+
+    @app.delete("/api/inference/native/{model_id}")
+    async def inference_native_unload(model_id: str, identity=Depends(AuthDependency(sec, required_scope=Scope.INFERENCE.value))):
+        engine = inf_engine.get_native_engine()
+        result = engine.unload_model(model_id)
+        return {"model_id": model_id, "unloaded": result}
+
+    @app.post("/api/inference/pipeline/plan")
+    async def inference_pipeline_plan(model_id: str, node_resources: list[dict] | None = None):
+        config = inf_engine.get_native_engine().configs.get(model_id)
+        if config is None:
+            raise HTTPException(404, f"Model {model_id} not configured — load it first")
+        executor = inf_engine.get_pipeline_executor()
+        resources = node_resources or [{"node_id": inf_engine.node_id, "vram_available_mb": 8192}]
+        stages = executor.plan_pipeline(model_id, config, resources)
+        return {
+            "model_id": model_id,
+            "total_stages": len(stages),
+            "stages": [s.model_dump() for s in stages],
+        }
+
+    @app.get("/api/inference/pipeline/status")
+    async def inference_pipeline_status(model_id: str | None = None):
+        executor = inf_engine.get_pipeline_executor()
+        if model_id:
+            return executor.get_pipeline_status(model_id)
+        return {"pipelines": executor.list_pipelines()}
+
+    @app.get("/api/inference/downloads/status")
+    async def inference_download_status():
+        downloader = inf_engine.get_model_downloader()
+        return {"active_downloads": downloader.get_download_status()}
 
     @app.get("/api/models/catalog")
     async def models_catalog(size_class: str | None = None, min_vram: float | None = None):
