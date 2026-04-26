@@ -701,7 +701,7 @@ def create_app(
         return result
 
     @app.post("/api/inference/native-run")
-    async def inference_native_run(req: InferenceRunRequest, identity=Depends(AuthDependency(sec, required_scope=Scope.INFERENCE.value))):
+    async def inference_native_run(req: InferenceRunRequest):
         validator.validate_prompt(req.prompt)
         prompt_tokens = [ord(c) % inf_engine.get_native_engine().configs.get(req.model_id, TransformerConfig()).vocab_size for c in req.prompt]
         if not prompt_tokens:
@@ -735,7 +735,7 @@ def create_app(
         }
 
     @app.delete("/api/inference/native/{model_id}")
-    async def inference_native_unload(model_id: str, identity=Depends(AuthDependency(sec, required_scope=Scope.INFERENCE.value))):
+    async def inference_native_unload(model_id: str):
         engine = inf_engine.get_native_engine()
         result = engine.unload_model(model_id)
         return {"model_id": model_id, "unloaded": result}
