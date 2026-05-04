@@ -751,3 +751,74 @@ class TestTokenizerAPI:
         assert req.model_id == "gpt2"
         assert req.token_ids == [15496, 995, 0]
         assert req.skip_special_tokens
+
+
+class TestActivationCompression:
+    def test_compress_decompress_roundtrip(self):
+        from netai.inference.compress import ActivationCompressor
+        import numpy as np
+        comp = ActivationCompressor(bits=8)
+        x = np.random.randn(3, 4, 768).astype(np.float32)
+        q = comp.compress(x)
+        restored = comp.decompress(q)
+        assert restored.shape == x.shape
+        assert np.allclose(x, restored, atol=0.1)
+
+    def test_compression_ratio(self):
+        from netai.inference.compress import ActivationCompressor
+        import numpy as np
+        comp = ActivationCompressor(bits=8)
+        x = np.random.randn(5, 10, 512).astype(np.float32)
+        q = comp.compress(x)
+        assert q.compression_ratio >= 3.0
+
+    def test_4bit_compression(self):
+        from netai.inference.compress import ActivationCompressor
+        import numpy as np
+        comp = ActivationCompressor(bits=4)
+        x = np.random.randn(2, 8, 256).astype(np.float32)
+        q = comp.compress(x)
+        assert q.compression_ratio >= 7.0
+        restored = comp.decompress(q)
+        assert restored.shape == x.shape
+
+    def test_near_constant_tensor(self):
+        from netai.inference.compress import ActivationCompressor
+        import numpy as np
+        comp = ActivationCompressor(bits=8)
+        x = np.ones((2, 2, 64), dtype=np.float32) * 0.5
+        q = comp.compress(x)
+        restored = comp.decompress(q)
+        assert restored.shape == x.shape
+
+    def test_quantize_api_helpers(self):
+        from netai.inference.compress import quantize_activation, dequantize_activation
+        import numpy as np
+        x = np.random.randn(2, 3, 256).astype(np.float32)
+        compressed = quantize_activation(x, bits=8)
+        assert "data_hex" in compressed
+        assert compressed["shape"] == [2, 3, 256]
+        restored = dequantize_activation(compressed)
+        assert restored.shape == (2, 3, 256)
+
+    def test_stats_accumulation(self):
+        from netai.inference.compress import ActivationCompressor
+        import numpy as np
+        comp = ActivationCompressor(bits=8)
+        for _ in range(5):
+            x = np.random.randn(4, 16, 512).astype(np.float32)
+            comp.compress(x)
+        stats = comp.get_stats()
+        assert stats["compressed_bytes_total"] > 0
+        assert stats["uncompressed_bytes_total"] > 0
+        assert stats["overall_ratio"] >= 3.0
+
+    def test_residual_compression(self):
+        from netai.inference.compress import ActivationCompressor
+        import numpy as np
+        comp = ActivationCompressor(bits=8, use_residual=True)
+        x = np.random.randn(2, 4, 512).astype(np.float32)
+        compressed = comp.compress_residual(x)
+        restored = comp.decompress_residual(compressed)
+        assert restored.shape == x.shape
+        assert np.allclose(x, restored, atol=0.05)

@@ -13,6 +13,7 @@ from netai.inference.autoloader import (
     AutoLoader, ModelEntry, ModelRegistry, ModelSizeClass,
 )
 from netai.inference.downloader import ModelDownloader, HFModelSource
+from netai.inference.compress import ActivationCompressor, quantize_activation, dequantize_activation
 from netai.inference.native_engine import NativeInferenceEngine, LayerShard, LayerResult
 from netai.inference.pipeline_executor import PipelineExecutor, PipelineStage, PipelineResult
 
@@ -26,6 +27,7 @@ __all__ = [
     "ModelDownloader", "HFModelSource",
     "NativeBPEEncoder",
     "get_tokenizer",
+    "ActivationCompressor", "quantize_activation", "dequantize_activation",
     "NativeInferenceEngine", "LayerShard", "LayerResult",
     "PipelineExecutor", "PipelineStage", "PipelineResult",
 ]

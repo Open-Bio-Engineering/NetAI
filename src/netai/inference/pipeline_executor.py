@@ -21,6 +21,7 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 from netai.inference.native_engine import NativeInferenceEngine, LayerResult, TransformerConfig
+from netai.inference.compress import ActivationCompressor, QuantizedTensor, quantize_activation, dequantize_activation
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +69,15 @@ class PipelineExecutor:
     Handles node failures by re-assigning layers.
     """
 
-    def __init__(self, local_engine: NativeInferenceEngine | None = None):
+    def __init__(self, local_engine: NativeInferenceEngine | None = None, enable_compression: bool = True):
         self.local_engine = local_engine or NativeInferenceEngine()
         self.pipelines: dict[str, dict[str, PipelineStage]] = {}
         self.configs: dict[str, TransformerConfig] = {}
         self._results_buffer: dict[str, dict[str, Any]] = {}
         self._pending_requests: dict[str, asyncio.Future] = {}
+        self._compressor = ActivationCompressor() if enable_compression else None
+        self._replicas: dict[str, list[str]] = {}
+        self._node_endpoints: dict[str, str] = {}
 
     def plan_pipeline(
         self,
@@ -179,45 +183,95 @@ class PipelineExecutor:
         request_id: str,
         stage_index: int,
         model_id: str,
+        compress: bool = True,
     ) -> np.ndarray | None:
-        """Send activation tensor to a remote P2P node for the next pipeline stage."""
+        """Send activation tensor to a remote P2P node for the next pipeline stage.
+        
+        Uses 8-bit quantization when compress=True (~4x bandwidth reduction).
+        """
         import aiohttp
         shape = list(hidden.shape)
         dtype = str(hidden.dtype)
         data = hidden.astype(np.float32).tobytes()
-        payload = {
-            "request_id": request_id,
-            "model_id": model_id,
-            "stage_index": stage_index,
-            "shape": shape,
-            "dtype": dtype,
-            "data_hex": data.hex(),
-            "data_size": len(data),
-        }
+
+        if compress and self._compressor is not None:
+            q = self._compressor.compress(hidden)
+            payload = {
+                "request_id": request_id, "model_id": model_id,
+                "stage_index": stage_index, "shape": shape,
+                "dtype": dtype, "data_hex": q.data.hex(),
+                "compressed": True, "scale": q.scale,
+                "zero_point": q.zero_point,
+            }
+        else:
+            payload = {
+                "request_id": request_id, "model_id": model_id,
+                "stage_index": stage_index, "shape": shape,
+                "dtype": dtype, "data_hex": data.hex(),
+                "compressed": False,
+            }
+
+        result = await self._try_send(target_endpoint, payload)
+        if result is None:
+            return None
+
+        if result.get("compressed"):
+            return ActivationCompressor().decompress(
+                QuantizedTensor(
+                    data=bytes.fromhex(result.get("data_hex", "")),
+                    shape=result.get("shape", shape),
+                    dtype_original=result.get("dtype", dtype),
+                    scale=result.get("scale", 1.0),
+                    zero_point=result.get("zero_point", 0.0),
+                    compression_ratio=1.0,
+                )
+            )
+        return np.frombuffer(
+            bytes.fromhex(result["data_hex"]),
+            dtype=np.dtype(result["dtype"]),
+        ).reshape(result["shape"])
+
+    async def _try_send(self, endpoint: str, payload: dict) -> dict | None:
+        """Send payload to an endpoint. Returns parsed response or None on failure."""
+        import aiohttp
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
-                url = f"{target_endpoint}/api/inference/pipeline/activate"
+                url = f"{endpoint}/api/inference/pipeline/activate"
                 async with session.post(url, json=payload) as resp:
                     if resp.status != 200:
-                        logger.error("Activation send failed to %s: %d", target_endpoint, resp.status)
+                        logger.error("Activation send failed to %s: %d", endpoint, resp.status)
                         return None
                     result = await resp.json(content_type=None)
                     if "error" in result:
-                        logger.error("Activation error from %s: %s", target_endpoint, result["error"])
+                        logger.error("Activation error from %s: %s", endpoint, result["error"])
                         return None
-                    result_data_hex = result.get("data_hex")
-                    result_shape = result.get("shape", shape)
-                    result_dtype = result.get("dtype", dtype)
-                    if not result_data_hex:
-                        logger.error("Remote node %s returned no activation data", target_endpoint)
-                        return None
-                    return np.frombuffer(
-                        bytes.fromhex(result_data_hex),
-                        dtype=np.dtype(result_dtype),
-                    ).reshape(result_shape)
+                    return result
         except Exception as e:
-            logger.error("Failed to send activation to %s: %s", target_endpoint, e)
+            logger.error("Failed to send activation to %s: %s", endpoint, e)
             return None
+
+    def register_node(self, node_id: str, endpoint: str) -> None:
+        """Register a P2P node's endpoint for future pipeline communication."""
+        self._node_endpoints[node_id] = endpoint
+
+    def add_replica(self, model_id: str, node_id: str) -> None:
+        """Add a replica node for fault tolerance. If primary fails, replica takes over."""
+        if model_id not in self._replicas:
+            self._replicas[model_id] = []
+        if node_id not in self._replicas[model_id]:
+            self._replicas[model_id].append(node_id)
+
+    def get_replicas(self, model_id: str) -> list[str]:
+        """Get list of replica node IDs for a model pipeline."""
+        return self._replicas.get(model_id, [])
+
+    def get_replica_endpoints(self, model_id: str) -> list[str]:
+        """Get endpoints for replica nodes in a model pipeline."""
+        return [
+            self._node_endpoints[nid]
+            for nid in self.get_replicas(model_id)
+            if nid in self._node_endpoints
+        ]
 
     async def run_pipeline(
         self,

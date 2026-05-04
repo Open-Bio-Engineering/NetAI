@@ -195,6 +195,7 @@ class NativeInferenceEngine:
         self._loaded_models: set[str] = set()
         self._tokenizers: dict[str, Any] = {}
         self._has_tokenizers = HAS_TOKENIZERS
+        self._kv_caches: dict[str, dict[int, tuple[np.ndarray, np.ndarray]]] = {}
 
     def _load_safetensors_header(self, path: str) -> dict[str, Any]:
         try:
@@ -433,6 +434,141 @@ class NativeInferenceEngine:
             tokens = [0]
         return tokens
 
+    def _forward_attention_with_cache(
+        self, hidden: np.ndarray, weights: dict[str, np.ndarray],
+        config: TransformerConfig, layer_idx: int,
+        kv_cache: tuple[np.ndarray, np.ndarray] | None = None,
+    ) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+        """Attention forward pass with KV cache for autoregressive decoding.
+        
+        Returns (output, updated_kv_cache). For the prefill (first) step,
+        kv_cache is None and the full prompt is processed. For subsequent
+        steps, only the new token's Q is computed; K/V are appended to cache.
+        """
+        batch, seq_len, _ = hidden.shape
+        num_heads = config.num_heads
+        head_dim = config.hidden_size // num_heads
+        
+        q_proj = weights.get("attn.c_attn.weight", weights.get("self_attn.q_proj.weight", None))
+        o_proj = weights.get("attn.c_proj.weight", weights.get("self_attn.o_proj.weight", None))
+        o_bias = weights.get("attn.c_proj.bias", weights.get("self_attn.o_proj.bias", None))
+        q_bias = weights.get("attn.c_attn.bias", weights.get("self_attn.q_proj.bias", None))
+        k_bias = weights.get("attn.c_attn.bias", weights.get("self_attn.k_proj.bias", None))
+        v_bias = weights.get("attn.c_attn.bias", weights.get("self_attn.v_proj.bias", None))
+        
+        if q_proj is None:
+            logger.error("Missing attention weights for layer %d", layer_idx)
+            rng = np.random.default_rng(42 + layer_idx)
+            q_proj = rng.standard_normal((config.hidden_size, config.hidden_size)).astype(np.float32) * 0.02
+            o_proj = rng.standard_normal((config.hidden_size, config.hidden_size)).astype(np.float32) * 0.02
+        
+        is_gpt2_qkv = q_proj.shape[1] == 3 * config.hidden_size
+        
+        if kv_cache is None or is_gpt2_qkv:
+            if is_gpt2_qkv:
+                qkv = hidden @ q_proj
+                if q_bias is not None:
+                    qkv += q_bias
+                q, k, v = np.split(qkv, 3, axis=-1)
+            else:
+                k_proj = weights.get("attn.c_attn.weight", weights.get("self_attn.k_proj.weight", q_proj))
+                v_proj = weights.get("attn.c_proj.weight", weights.get("self_attn.v_proj.weight", q_proj))
+                q = hidden @ q_proj
+                k = hidden @ k_proj.T if k_proj.ndim == 2 else hidden @ k_proj
+                v = hidden @ v_proj.T if v_proj.ndim == 2 else hidden @ v_proj
+                if q_bias is not None:
+                    q += q_bias
+                if k_bias is not None:
+                    k += k_bias
+                if v_bias is not None:
+                    v += v_bias
+            q = q.reshape(batch, seq_len, num_heads, head_dim)
+            k = k.reshape(batch, seq_len, num_heads, head_dim)
+            v = v.reshape(batch, seq_len, num_heads, head_dim)
+            new_kv_cache = (k, v)
+        else:
+            cached_k, cached_v = kv_cache
+            if is_gpt2_qkv:
+                qkv_new = hidden @ q_proj
+                if q_bias is not None:
+                    qkv_new += q_bias
+                q_new, k_new, v_new = np.split(qkv_new, 3, axis=-1)
+            else:
+                k_proj = weights.get("attn.c_attn.weight", weights.get("self_attn.k_proj.weight", q_proj))
+                v_proj = weights.get("attn.c_proj.weight", weights.get("self_attn.v_proj.weight", q_proj))
+                q_new = hidden @ q_proj
+                k_new = hidden @ k_proj.T if k_proj.ndim == 2 else hidden @ k_proj
+                v_new = hidden @ v_proj.T if v_proj.ndim == 2 else hidden @ v_proj
+                if q_bias is not None:
+                    q_new += q_bias
+            q = q_new.reshape(batch, 1, num_heads, head_dim)
+            k_new = k_new.reshape(batch, 1, num_heads, head_dim)
+            v_new = v_new.reshape(batch, 1, num_heads, head_dim)
+            k = np.concatenate([cached_k, k_new], axis=1)
+            v = np.concatenate([cached_v, v_new], axis=1)
+            new_kv_cache = (k, v)
+        
+        scores = np.matmul(q.transpose(0, 2, 1, 3), k.transpose(0, 2, 3, 1)) / np.sqrt(head_dim)
+        mask = np.triu(np.full((scores.shape[2], scores.shape[3]), -1e9), k=1)
+        scores = scores + mask[-scores.shape[2]:, :scores.shape[3]]
+        attn_weights = _softmax(scores, axis=-1)
+        attn_out = np.matmul(attn_weights, v.transpose(0, 2, 1, 3))
+        attn_out = attn_out.transpose(0, 2, 1, 3).reshape(batch, scores.shape[2], config.hidden_size)
+        
+        output = attn_out @ (o_proj.T if o_proj.ndim == 2 else o_proj)
+        if o_bias is not None:
+            output += o_bias
+        
+        return output, new_kv_cache
+    
+    def forward_layer_cached(
+        self,
+        hidden: np.ndarray,
+        model_id: str,
+        layer_idx: int,
+        kv_cache: tuple[np.ndarray, np.ndarray] | None = None,
+    ) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+        """Single transformer layer with KV cache. Returns (hidden, updated_kv)."""
+        config = self.configs.get(model_id)
+        if config is None:
+            raise ValueError(f"Model {model_id} not loaded")
+
+        key = f"{model_id}/layer_{layer_idx}"
+        weights = self.layers.get(key)
+        if weights is None:
+            rng = np.random.default_rng(42 + layer_idx)
+            hidden_shape = hidden.shape
+            residual = hidden + rng.standard_normal(hidden_shape).astype(np.float32) * 0.001
+            norm_w = rng.standard_normal((config.hidden_size,)).astype(np.float32) * 0.1 + 1.0
+            norm_b = np.zeros(config.hidden_size, dtype=np.float32)
+            return _layer_norm(residual, norm_w, norm_b, config.layer_norm_eps), kv_cache
+
+        ln1_w = weights.get("ln_1.weight", weights.get("input_layernorm.weight"))
+        ln1_b = weights.get("ln_1.bias", weights.get("input_layernorm.bias"))
+        if ln1_w is not None:
+            ln1_bias = ln1_b if ln1_b is not None else np.zeros_like(ln1_w)
+            hidden_normed = _layer_norm(hidden, ln1_w, ln1_bias, config.layer_norm_eps)
+        else:
+            hidden_normed = hidden
+
+        attn_out, new_kv = self._forward_attention_with_cache(
+            hidden_normed, weights, config, layer_idx, kv_cache
+        )
+        hidden = hidden + attn_out
+
+        ln2_w = weights.get("ln_2.weight", weights.get("post_attention_layernorm.weight"))
+        ln2_b = weights.get("ln_2.bias", weights.get("post_attention_layernorm.bias"))
+        if ln2_w is not None:
+            ln2_bias = ln2_b if ln2_b is not None else np.zeros_like(ln2_w)
+            hidden_normed = _layer_norm(hidden, ln2_w, ln2_bias, config.layer_norm_eps)
+        else:
+            hidden_normed = hidden
+
+        ffn_out = self._forward_ffn(hidden_normed, weights, config)
+        hidden = hidden + ffn_out
+
+        return hidden, new_kv
+    
     def _forward_attention(
         self, hidden: np.ndarray, weights: dict[str, np.ndarray],
         config: TransformerConfig, layer_idx: int, cos_a: np.ndarray = None,
@@ -615,6 +751,7 @@ class NativeInferenceEngine:
         temperature: float = 0.7,
         top_p: float = 0.9,
         top_k: int = 50,
+        use_kv_cache: bool = True,
     ) -> dict[str, Any]:
         config = self.configs.get(model_id)
         if config is None:
@@ -630,6 +767,12 @@ class NativeInferenceEngine:
         tokens = list(prompt_tokens)
         t0 = time.time()
         total_generated = 0
+        
+        if use_kv_cache and config.model_type == "gpt2":
+            return self._generate_with_kv_cache(
+                model_id, config, embed, output_w, ln_f,
+                tokens, max_tokens, temperature, top_p, top_k, t0
+            )
 
         for step in range(max_tokens):
             input_ids = np.array(tokens, dtype=np.int64).reshape(1, -1)
@@ -649,30 +792,103 @@ class NativeInferenceEngine:
                 logits = hidden @ embed.T
 
             logits = logits / max(temperature, 0.01)
-
-            if top_k > 0 and top_k < logits.shape[-1]:
-                top_k_indices = np.argsort(logits[0])[-top_k:]
-                mask = np.full(logits.shape, -1e9, dtype=np.float32)
-                mask[0, top_k_indices] = logits[0, top_k_indices]
-                logits = mask
-
-            if top_p < 1.0:
-                sorted_indices = np.argsort(logits[0])[::-1]
-                sorted_logits = logits[0, sorted_indices]
-                probs = _softmax(sorted_logits.reshape(1, -1), axis=-1)[0]
-                cum_probs = np.cumsum(probs)
-                cutoff = np.searchsorted(cum_probs, top_p) + 1
-                mask_indices = sorted_indices[cutoff:]
-                logits[0, mask_indices] = -1e9
-
-            probs = _softmax(logits, axis=-1)[0]
+            probs = self._sample_logits(logits, top_k, top_p)
             next_token = int(np.random.choice(len(probs), p=probs))
             tokens.append(next_token)
             total_generated += 1
 
         latency_ms = (time.time() - t0) * 1000
         tps = total_generated / max(latency_ms / 1000, 0.001)
+        return self._build_generate_result(model_id, tokens, prompt_tokens, total_generated, latency_ms, tps)
 
+    def _sample_logits(self, logits: np.ndarray, top_k: int, top_p: float) -> np.ndarray:
+        if top_k > 0 and top_k < logits.shape[-1]:
+            top_k_indices = np.argsort(logits[0])[-top_k:]
+            mask = np.full(logits.shape, -1e9, dtype=np.float32)
+            mask[0, top_k_indices] = logits[0, top_k_indices]
+            logits = mask
+
+        if top_p < 1.0:
+            sorted_indices = np.argsort(logits[0])[::-1]
+            sorted_logits = logits[0, sorted_indices]
+            probs = _softmax(sorted_logits.reshape(1, -1), axis=-1)[0]
+            cum_probs = np.cumsum(probs)
+            cutoff = np.searchsorted(cum_probs, top_p) + 1
+            mask_indices = sorted_indices[cutoff:]
+            logits[0, mask_indices] = -1e9
+
+        return _softmax(logits, axis=-1)[0]
+
+    def _generate_with_kv_cache(
+        self, model_id: str, config: TransformerConfig,
+        embed: np.ndarray, output_w: np.ndarray | None,
+        ln_f: tuple[np.ndarray, np.ndarray] | None,
+        tokens: list[int], max_tokens: int, temperature: float,
+        top_p: float, top_k: int, t0: float,
+    ) -> dict[str, Any]:
+        """Generate tokens with KV cache for O(n) instead of O(n²) complexity."""
+        prompt_tokens = list(tokens)
+        total_generated = 0
+        
+        input_ids = np.array(tokens, dtype=np.int64).reshape(1, -1)
+        hidden = embed[input_ids]
+        
+        kv_caches: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        for i in range(config.num_layers):
+            hidden, new_kv = self.forward_layer_cached(hidden, model_id, i, None)
+            kv_caches[i] = new_kv
+        
+        if ln_f is not None:
+            logit_input = _layer_norm(hidden[:, -1:, :], ln_f[0], ln_f[1], config.layer_norm_eps)
+        else:
+            logit_input = hidden[:, -1:, :]
+        logit_input = logit_input[:, 0, :]
+        
+        if output_w is not None:
+            logits = logit_input @ output_w.T
+        else:
+            logits = logit_input @ embed.T
+        
+        logits = logits / max(temperature, 0.01)
+        probs = self._sample_logits(logits, top_k, top_p)
+        next_token = int(np.random.choice(len(probs), p=probs))
+        tokens.append(next_token)
+        total_generated += 1
+        
+        for step in range(1, max_tokens):
+            new_input = np.array([[next_token]], dtype=np.int64)
+            hidden = embed[new_input]
+            
+            for i in range(config.num_layers):
+                cached_kv = kv_caches.get(i)
+                hidden, new_kv = self.forward_layer_cached(hidden, model_id, i, cached_kv)
+                kv_caches[i] = new_kv
+            
+            if ln_f is not None:
+                logit_input = _layer_norm(hidden[:, -1:, :], ln_f[0], ln_f[1], config.layer_norm_eps)
+            else:
+                logit_input = hidden[:, -1:, :]
+            logit_input = logit_input[:, 0, :]
+            
+            if output_w is not None:
+                logits = logit_input @ output_w.T
+            else:
+                logits = logit_input @ embed.T
+            
+            logits = logits / max(temperature, 0.01)
+            probs = self._sample_logits(logits, top_k, top_p)
+            next_token = int(np.random.choice(len(probs), p=probs))
+            tokens.append(next_token)
+            total_generated += 1
+        
+        latency_ms = (time.time() - t0) * 1000
+        tps = total_generated / max(latency_ms / 1000, 0.001)
+        return self._build_generate_result(model_id, tokens, prompt_tokens, total_generated, latency_ms, tps)
+
+    def _build_generate_result(
+        self, model_id: str, tokens: list[int], prompt_tokens: list[int],
+        total_generated: int, latency_ms: float, tps: float,
+    ) -> dict[str, Any]:
         text = ""
         tok = self._tokenizers.get(model_id)
         if tok is not None:
