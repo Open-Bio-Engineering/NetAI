@@ -20,6 +20,19 @@ from typing import Any
 import numpy as np
 from pydantic import BaseModel, Field
 
+from netai.inference.gguf_parser import (
+    GGUFReader,
+    GGUF_MAGIC,
+    GGML_TYPE_F32,
+    GGML_TYPE_F16,
+    GGML_TYPE_BF16,
+    GGML_TYPE_Q4_0,
+    GGML_TYPE_Q8_0,
+    GGML_TYPE_I8,
+    GGML_TYPE_I16,
+    GGML_TYPE_I32,
+)
+
 logger = logging.getLogger(__name__)
 
 HAS_TORCH = False
@@ -149,11 +162,21 @@ def _layer_norm(x: np.ndarray, weight: np.ndarray, bias: np.ndarray, eps: float 
 
 
 def _gelu(x: np.ndarray) -> np.ndarray:
-    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3)))
+    f32 = np.float32
+    return f32(0.5) * x * (f32(1.0) + np.tanh(np.sqrt(f32(2.0) / np.pi) * (x + f32(0.044715) * x ** f32(3))))
 
 
 def _silu(x: np.ndarray) -> np.ndarray:
-    return x * (1.0 / (1.0 + np.exp(-x)))
+    x_f32 = x.astype(np.float32, copy=False)
+    result = x_f32 / (np.float32(1.0) + np.exp(-x_f32))
+    if x.dtype != np.float32:
+        result = result.astype(x.dtype, copy=False)
+    return result
+
+
+def _gelu(x: np.ndarray) -> np.ndarray:
+    f32 = np.float32
+    return f32(0.5) * x * (f32(1.0) + np.tanh(np.sqrt(f32(2.0) / np.pi) * (x + f32(0.044715) * x ** f32(3))))
 
 
 def _rope_positions(seq_len: int, head_dim: int, theta: float = 10000.0) -> tuple[np.ndarray, np.ndarray]:
@@ -168,13 +191,19 @@ def _rope_positions(seq_len: int, head_dim: int, theta: float = 10000.0) -> tupl
 def _apply_rope(hidden: np.ndarray, cos_a: np.ndarray, sin_a: np.ndarray) -> np.ndarray:
     batch, seq, heads, head_d = hidden.shape
     d2 = head_d // 2
-    x1 = hidden[..., :d2]
-    x2 = hidden[..., d2:]
+    rot_d = 2 * d2
+    x_rot = hidden[..., :rot_d]
+    x_pass = hidden[..., rot_d:] if rot_d < head_d else None
+    x1 = x_rot[..., :d2]
+    x2 = x_rot[..., d2:]
     cos_b = cos_a[:seq, :d2][np.newaxis, :, np.newaxis, :]
     sin_b = sin_a[:seq, :d2][np.newaxis, :, np.newaxis, :]
     out1 = x1 * cos_b - x2 * sin_b
     out2 = x2 * cos_b + x1 * sin_b
-    return np.concatenate([out1, out2], axis=-1)
+    result = np.concatenate([out1, out2], axis=-1)
+    if x_pass is not None:
+        result = np.concatenate([result, x_pass], axis=-1)
+    return result
 
 
 class NativeInferenceEngine:
@@ -284,8 +313,149 @@ class NativeInferenceEngine:
             return {}
 
     def _load_gguf_file(self, path: str) -> dict[str, np.ndarray]:
-        logger.warning("GGUF format requires llama-cpp-python or gguf package — skipping %s", path)
-        return {}
+        reader = GGUFReader(path)
+        try:
+            if not reader.open():
+                logger.error("Failed to open GGUF file: %s", path)
+                return {}
+            weights = reader.load_all_tensors()
+            logger.info("Loaded %d tensors from GGUF %s", len(weights), path)
+            return weights
+        except Exception as e:
+            logger.error("GGUF load failed for %s: %s", path, e)
+            return {}
+        finally:
+            reader.close()
+
+    def load_gguf_model(self, model_id: str, gguf_path: str) -> LayerShard:
+        t0 = time.time()
+        if not os.path.exists(gguf_path):
+            logger.error("GGUF file not found: %s", gguf_path)
+            return LayerShard(model_id=model_id)
+
+        reader = GGUFReader(gguf_path)
+        try:
+            if not reader.open():
+                logger.error("Failed to open GGUF file: %s", gguf_path)
+                return LayerShard(model_id=model_id)
+
+            arch = reader.metadata.get("general.architecture", "llama")
+            vocab_sz = reader.metadata.get("llama.vocab_length") or reader.metadata.get("gpt2.vocab_size")
+            if vocab_sz is None:
+                tok_list = reader.metadata.get("tokenizer.ggml.tokens")
+                if isinstance(tok_list, list):
+                    vocab_sz = len(tok_list)
+                else:
+                    vocab_sz = 50257
+            config = TransformerConfig(
+                vocab_size=vocab_sz,
+                hidden_size=reader.metadata.get("llama.embedding_length", reader.metadata.get("gpt2.n_embd", 768)),
+                num_layers=reader.metadata.get("llama.block_count", reader.metadata.get("gpt2.n_layer", 12)),
+                num_heads=reader.metadata.get("llama.attention.head_count", reader.metadata.get("gpt2.n_head", 12)),
+                intermediate_size=reader.metadata.get("llama.feed_forward_length", reader.metadata.get("gpt2.n_inner", 3072)),
+                max_position_embeddings=reader.metadata.get("llama.context_length", reader.metadata.get("gpt2.n_positions", 2048)),
+                layer_norm_eps=reader.metadata.get("llama.attention.layer_norm_rms_epsilon", reader.metadata.get("gpt2.layer_norm_epsilon", 1e-5)),
+                rope_theta=reader.metadata.get("llama.rope.theta", reader.metadata.get("llama.rope.freq_base", 10000.0)),
+                model_type=arch,
+            )
+            self.configs[model_id] = config
+
+            all_weights = reader.load_all_tensors()
+            if not all_weights:
+                logger.error("No tensors loaded from GGUF %s", gguf_path)
+                return LayerShard(model_id=model_id)
+
+            num_layers_loaded = 0
+            total_mem = 0.0
+
+            for tl in range(config.num_layers):
+                layer_weights = {}
+                prefix = f"blk.{tl}."
+
+                attn_q = all_weights.get(f"{prefix}attn_q.weight")
+                attn_k = all_weights.get(f"{prefix}attn_k.weight")
+                attn_v = all_weights.get(f"{prefix}attn_v.weight")
+                attn_o = all_weights.get(f"{prefix}attn_output.weight")
+
+                if attn_q is not None:
+                    layer_weights["self_attn.q_proj.weight"] = attn_q.astype(np.float32)
+                    total_mem += attn_q.nbytes
+                if attn_k is not None:
+                    layer_weights["self_attn.k_proj.weight"] = attn_k.astype(np.float32)
+                    total_mem += attn_k.nbytes
+                if attn_v is not None:
+                    layer_weights["self_attn.v_proj.weight"] = attn_v.astype(np.float32)
+                    total_mem += attn_v.nbytes
+                if attn_o is not None:
+                    layer_weights["self_attn.o_proj.weight"] = attn_o.astype(np.float32)
+                    total_mem += attn_o.nbytes
+
+                attn_norm = all_weights.get(f"{prefix}attn_norm.weight")
+                if attn_norm is not None:
+                    layer_weights["input_layernorm.weight"] = attn_norm.astype(np.float32)
+                    total_mem += attn_norm.nbytes
+
+                ffn_gate = all_weights.get(f"{prefix}ffn_gate.weight")
+                ffn_up = all_weights.get(f"{prefix}ffn_up.weight")
+                ffn_down = all_weights.get(f"{prefix}ffn_down.weight")
+
+                if ffn_gate is not None:
+                    layer_weights["mlp.gate_proj.weight"] = ffn_gate.astype(np.float32)
+                    total_mem += ffn_gate.nbytes
+                if ffn_up is not None:
+                    layer_weights["mlp.up_proj.weight"] = ffn_up.astype(np.float32)
+                    total_mem += ffn_up.nbytes
+                if ffn_down is not None:
+                    layer_weights["mlp.down_proj.weight"] = ffn_down.astype(np.float32)
+                    total_mem += ffn_down.nbytes
+
+                ffn_norm = all_weights.get(f"{prefix}ffn_norm.weight")
+                if ffn_norm is not None:
+                    layer_weights["post_attention_layernorm.weight"] = ffn_norm.astype(np.float32)
+                    total_mem += ffn_norm.nbytes
+
+                if layer_weights:
+                    self.layers[f"{model_id}/layer_{tl}"] = layer_weights
+                    num_layers_loaded += 1
+
+            embed_w = all_weights.get("token_embd.weight")
+            if embed_w is not None:
+                self.embed_tokens[model_id] = embed_w.astype(np.float32)
+                total_mem += embed_w.nbytes
+
+            output_w = all_weights.get("output.weight")
+            if output_w is not None:
+                self.output_proj[model_id] = output_w.astype(np.float32)
+                total_mem += output_w.nbytes
+
+            output_norm = all_weights.get("output_norm.weight")
+            if output_norm is not None:
+                ln_b = np.zeros(config.hidden_size, dtype=np.float32)
+                output_norm_b = all_weights.get("output_norm.bias")
+                if output_norm_b is not None:
+                    ln_b = output_norm_b.astype(np.float32)
+                self.layer_norm_f[model_id] = (output_norm.astype(np.float32), ln_b)
+                total_mem += output_norm.nbytes + ln_b.nbytes
+
+            self._loaded_models.add(model_id)
+            load_time = time.time() - t0
+            shard = LayerShard(
+                model_id=model_id,
+                layer_start=0,
+                layer_end=config.num_layers - 1,
+                num_layers=num_layers_loaded,
+                loaded=num_layers_loaded > 0,
+                load_time_s=round(load_time, 2),
+                memory_mb=round(total_mem / (1024 * 1024), 2),
+            )
+            logger.info("Loaded %d layers from GGUF for %s (%.1f MB, %.1fs)",
+                         num_layers_loaded, model_id, total_mem / (1024 * 1024), load_time)
+            return shard
+        except Exception as e:
+            logger.error("GGUF model load failed for %s: %s", model_id, e)
+            return LayerShard(model_id=model_id)
+        finally:
+            reader.close()
 
     def _load_weights_from_dir(self, model_dir: str) -> dict[str, np.ndarray]:
         all_weights = {}
@@ -315,9 +485,17 @@ class NativeInferenceEngine:
         return all_weights
 
     def load_model(self, model_id: str, model_dir: str, layer_start: int = -1, layer_end: int = -1) -> LayerShard:
+        if os.path.isfile(model_dir) and model_dir.endswith(".gguf"):
+            return self.load_gguf_model(model_id, model_dir)
+
         t0 = time.time()
         config_path = os.path.join(model_dir, "config.json")
         if not os.path.exists(config_path):
+            if os.path.isdir(model_dir):
+                gguf_files = [f for f in os.listdir(model_dir) if f.endswith(".gguf")]
+                if gguf_files:
+                    logger.info("No config.json, but found GGUF file: %s", gguf_files[0])
+                    return self.load_gguf_model(model_id, os.path.join(model_dir, gguf_files[0]))
             logger.error("No config.json found in %s", model_dir)
             return LayerShard(model_id=model_id)
 
@@ -439,15 +617,10 @@ class NativeInferenceEngine:
         config: TransformerConfig, layer_idx: int,
         kv_cache: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
-        """Attention forward pass with KV cache for autoregressive decoding.
-        
-        Returns (output, updated_kv_cache). For the prefill (first) step,
-        kv_cache is None and the full prompt is processed. For subsequent
-        steps, only the new token's Q is computed; K/V are appended to cache.
-        """
         batch, seq_len, _ = hidden.shape
         num_heads = config.num_heads
         head_dim = config.hidden_size // num_heads
+        inv_scale = np.float32(1.0 / math.sqrt(head_dim))
         
         q_proj = weights.get("attn.c_attn.weight", weights.get("self_attn.q_proj.weight", None))
         o_proj = weights.get("attn.c_proj.weight", weights.get("self_attn.o_proj.weight", None))
@@ -508,8 +681,8 @@ class NativeInferenceEngine:
             v = np.concatenate([cached_v, v_new], axis=1)
             new_kv_cache = (k, v)
         
-        scores = np.matmul(q.transpose(0, 2, 1, 3), k.transpose(0, 2, 3, 1)) / np.sqrt(head_dim)
-        mask = np.triu(np.full((scores.shape[2], scores.shape[3]), -1e9), k=1)
+        scores = np.matmul(q.transpose(0, 2, 1, 3), k.transpose(0, 2, 3, 1)) * inv_scale
+        mask = np.triu(np.full((scores.shape[2], scores.shape[3]), np.float32(-1e9)), k=1)
         scores = scores + mask[-scores.shape[2]:, :scores.shape[3]]
         attn_weights = _softmax(scores, axis=-1)
         attn_out = np.matmul(attn_weights, v.transpose(0, 2, 1, 3))
@@ -577,6 +750,7 @@ class NativeInferenceEngine:
         batch, seq_len, _ = hidden.shape
         num_heads = config.num_heads
         head_dim = config.hidden_size // num_heads
+        inv_scale = np.float32(1.0 / math.sqrt(head_dim))
 
         q_proj = weights.get("attn.c_attn.weight", weights.get("self_attn.q_proj.weight", None))
         k_proj = weights.get("attn.c_attn.weight", weights.get("self_attn.k_proj.weight", None))
@@ -622,9 +796,9 @@ class NativeInferenceEngine:
             q = _apply_rope(q, cos_a, sin_a)
             k = _apply_rope(k, cos_a, sin_a)
 
-        scores = np.matmul(q.transpose(0, 2, 1, 3), k.transpose(0, 2, 3, 1)) / np.sqrt(head_dim)
+        scores = np.matmul(q.transpose(0, 2, 1, 3), k.transpose(0, 2, 3, 1)) * inv_scale
 
-        mask = np.triu(np.full((seq_len, seq_len), -1e9), k=1)
+        mask = np.triu(np.full((seq_len, seq_len), np.float32(-1e9)), k=1)
         scores = scores + mask
 
         attn_weights = _softmax(scores, axis=-1)
@@ -804,7 +978,7 @@ class NativeInferenceEngine:
     def _sample_logits(self, logits: np.ndarray, top_k: int, top_p: float) -> np.ndarray:
         if top_k > 0 and top_k < logits.shape[-1]:
             top_k_indices = np.argsort(logits[0])[-top_k:]
-            mask = np.full(logits.shape, -1e9, dtype=np.float32)
+            mask = np.full(logits.shape, np.float32(-1e9), dtype=np.float32)
             mask[0, top_k_indices] = logits[0, top_k_indices]
             logits = mask
 
@@ -815,7 +989,7 @@ class NativeInferenceEngine:
             cum_probs = np.cumsum(probs)
             cutoff = np.searchsorted(cum_probs, top_p) + 1
             mask_indices = sorted_indices[cutoff:]
-            logits[0, mask_indices] = -1e9
+            logits[0, mask_indices] = np.float32(-1e9)
 
         return _softmax(logits, axis=-1)[0]
 

@@ -279,3 +279,51 @@ class TestModelsAndAutoloaderAPI:
         d = r.json()
         assert "available_vram_mb" in d
         assert "recommended_models" in d
+
+class TestCompressionAPI:
+    def test_compress_endpoint(self, client):
+        data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        r = client.post("/api/inference/compress", json={"data": data, "shape": [2, 3]})
+        assert r.status_code == 200
+        d = r.json()
+        assert "data_hex" in d
+        assert d["shape"] == [2, 3]
+        assert d["compression_ratio"] > 1.0
+
+    def test_compress_bad_request(self, client):
+        r = client.post("/api/inference/compress", json={})
+        assert r.status_code == 400
+
+    def test_compress_4bit(self, client):
+        import numpy as np
+        x = np.random.randn(16, 64).astype(np.float32).tolist()
+        r = client.post("/api/inference/compress", json={"data": x, "shape": [16, 64], "bits": 4})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["compression_ratio"] >= 6.0
+
+    def test_decompress_endpoint(self, client):
+        data = list(range(100))
+        r = client.post("/api/inference/compress", json={"data": data, "shape": [10, 10]})
+        assert r.status_code == 200
+        compressed = r.json()
+        r2 = client.post("/api/inference/decompress", json=compressed)
+        assert r2.status_code == 200
+        d2 = r2.json()
+        assert "data" in d2
+        assert len(d2["data"]) > 0
+
+
+class TestStreamingAPI:
+    def test_native_stream_endpoint(self, client):
+        r = client.get("/api/inference/native-stream?model_id=gpt2&prompt=Hello&max_tokens=3")
+        assert r.status_code == 200
+        content = r.text
+        assert "data: {" in content
+        assert "type" in content
+
+    def test_native_stream_no_model(self, client):
+        r = client.get("/api/inference/native-stream?model_id=nonexistent&prompt=test")
+        assert r.status_code == 200
+        content = r.text
+        assert "error" in content

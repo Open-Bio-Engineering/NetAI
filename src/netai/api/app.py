@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, field_validator
 
 from netai.p2p.network import P2PNode, PeerInfo, NodeState
+from netai.p2p.handshake import HandshakeProtocol, NodeCapabilities, detect_capabilities
 from netai.resource.profiler import ResourceProfiler, ResourceProfile, can_run_model, suggest_batch_size
 from netai.training.engine import TrainingConfig, TrainingStatus, DeviceType, OptimizerType
 from netai.training.coordinator import DistributedTrainingCoordinator
@@ -40,9 +41,14 @@ from netai.inference.autoloader import AutoLoader, ModelEntry, ModelRegistry, Mo
 from netai.inference.native_engine import NativeInferenceEngine, TransformerConfig
 from netai.inference.pipeline_executor import PipelineExecutor
 from netai.inference.downloader import ModelDownloader
+from netai.cache.manager import ModelCacheManager, CacheHitRequest, CacheStatsResponse
 from netai.inference.tokenizer import get_tokenizer
 from netai.inference.compress import quantize_activation, dequantize_activation, ActivationCompressor
 from netai.training.engine import GradientSyncServer
+from netai.benchmark.runner import (
+    ModelBenchmark, BenchmarkConfig, BenchmarkResult,
+    InferenceMetrics, MemoryMetrics, StartupMetrics, PipelineMetrics,
+)
 from netai.security import (
     SecurityMiddleware, AuthDependency, Scope, UserRole, InputValidator,
     GradientIntegrityChecker, ModelProvenance,
@@ -153,10 +159,12 @@ class DecodeRequest(BaseModel):
 
 
 class CompressRequest(BaseModel):
-    data: list[float] = Field(default_factory=list)
+    data: list = Field(default_factory=list)
     shape: list[int] = Field(default_factory=list)
     bits: int = Field(8, ge=4, le=8)
     model_id: str = ""
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class ModelLoadRequest(BaseModel):
@@ -251,6 +259,8 @@ def create_app(
     scheduler: JobScheduler | None = None,
     inference_gateway: InferenceGateway | None = None,
     security: SecurityMiddleware | None = None,
+    benchmark_runner: ModelBenchmark | None = None,
+    native_engine: NativeInferenceEngine | None = None,
 ) -> FastAPI:
     p2p = p2p_node or P2PNode()
     coord = coordinator or DistributedTrainingCoordinator(p2p)
@@ -259,6 +269,8 @@ def create_app(
     gh = github or GitHubIntegration()
     sched = scheduler or JobScheduler()
     inf_engine = InferenceEngine(node_id=p2p.node_id)
+    if native_engine is not None:
+        inf_engine._native_engine = native_engine
     inf_lb = InferenceLoadBalancer(RoutingStrategy.ADAPTIVE)
     inf_gw = inference_gateway or InferenceGateway(inf_engine, inf_lb)
     grad_sync = GradientSyncServer(node_id=p2p.node_id)
@@ -269,6 +281,12 @@ def create_app(
     model_registry = ModelRegistry()
     model_registry.load_local()
     model_autoloader = AutoLoader(model_registry)
+    ENGINE_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "netai")
+    handshake = HandshakeProtocol(node_id=p2p.node_id, port=p2p.port)
+    benchmark = benchmark_runner or ModelBenchmark(
+        engine=inf_engine.get_native_engine(),
+        cache_dir=ENGINE_CACHE_DIR,
+    )
 
     metrics_data: dict[str, Any] = {"requests": 0, "errors": 0, "start_time": time.time()}
 
@@ -354,6 +372,38 @@ def create_app(
             "peers": [p.model_dump() for p in peers],
             "count": len(peers),
         }
+
+    @app.post("/api/p2p/handshake")
+    async def p2p_handshake_receive(req: Request):
+        body = await req.json()
+        caps = handshake.receive_handshake(body)
+        return {"accepted": True, "node_id": handshake.node_id,
+                "peer_count": len(handshake.peer_capabilities),
+                "caps": handshake.capabilities.model_dump()}
+
+    @app.get("/api/p2p/capabilities/{node_id}")
+    async def p2p_capabilities(node_id: str):
+        return handshake.capabilities.model_dump()
+
+    @app.get("/api/p2p/status")
+    async def p2p_handshake_status():
+        return handshake.get_status()
+
+    @app.get("/api/p2p/ping")
+    async def p2p_ping():
+        return {"status": "ok", "node_id": handshake.node_id, "uptime_s": handshake.capabilities.uptime_s}
+
+    @app.post("/api/p2p/score")
+    async def p2p_scores():
+        return {"scores": {nid: s.model_dump() for nid, s in handshake.peer_scores.items()}}
+
+    @app.get("/api/p2p/suggest-role")
+    async def p2p_suggest_role():
+        return handshake.suggest_pipeline_role()
+
+    @app.get("/api/p2p/best-for-layers")
+    async def p2p_best_for_layers(num_layers: int = 4, memory_per_layer_mb: float = 500):
+        return {"candidates": handshake.best_node_for_layers(num_layers, memory_per_layer_mb)}
 
     @app.post("/api/training/submit")
     async def submit_training(req: TrainingRequest, identity=Depends(AuthDependency(sec, required_scope=Scope.TRAIN.value))):
@@ -791,6 +841,58 @@ def create_app(
             return executor.get_pipeline_status(model_id)
         return {"pipelines": executor.list_pipelines()}
 
+    @app.post("/api/inference/pipeline/activate")
+    async def inference_pipeline_activate(req: Request):
+        """Remote pipeline stage activation — receives hidden states from
+        previous stage, runs assigned layers, returns output activation."""
+        from netai.inference.native_engine import _layer_norm
+        body = await req.json()
+        request_id = body.get("request_id", "")
+        model_id = body.get("model_id", "")
+        stage_index = body.get("stage_index", 0)
+        compressed = body.get("compressed", False)
+
+        engine = inf_engine.get_native_engine()
+        if model_id not in engine._loaded_models:
+            return JSONResponse({"error": f"Model {model_id} not loaded on this node", "request_id": request_id}, status_code=404)
+
+        shape = body.get("shape", [])
+        dtype = body.get("dtype", "float32")
+        data_hex = body.get("data_hex", "")
+
+        if compressed:
+            from netai.inference.compress import QuantizedTensor
+            hidden = ActivationCompressor().decompress(QuantizedTensor(
+                data=bytes.fromhex(data_hex), shape=shape,
+                dtype_original=dtype, scale=body.get("scale", 1.0),
+                zero_point=body.get("zero_point", 0.0), compression_ratio=1.0,
+            ))
+        else:
+            hidden = np.frombuffer(bytes.fromhex(data_hex), dtype=np.dtype(dtype)).reshape(shape)
+
+        t0 = time.time()
+        executor = inf_engine.get_pipeline_executor()
+        pipeline_stages = executor.pipelines.get(model_id, {})
+        my_stage = None
+        for sid, s in pipeline_stages.items():
+            if s.stage_index == stage_index and s.node_id == engine.node_id:
+                my_stage = s
+                break
+
+        if my_stage is None:
+            return JSONResponse({"error": f"No local stage found for model {model_id}", "request_id": request_id}, status_code=404)
+
+        output = engine.forward(hidden, model_id, my_stage.layer_start, my_stage.layer_end)
+        lat_ms = (time.time() - t0) * 1000
+
+        result_data = output.astype(np.float32).tobytes()
+        return {
+            "request_id": request_id, "model_id": model_id,
+            "stage_index": stage_index, "shape": list(output.shape),
+            "dtype": str(output.dtype), "data_hex": result_data.hex(),
+            "latency_ms": round(lat_ms, 2), "compressed": False,
+        }
+
     @app.get("/api/inference/downloads/status")
     async def inference_download_status():
         downloader = inf_engine.get_model_downloader()
@@ -801,7 +903,6 @@ def create_app(
         """Compress activation tensor using 8-bit quantization for pipeline transfer."""
         if not req.data or not req.shape:
             raise HTTPException(400, "data and shape required")
-        import numpy as np
         tensor = np.array(req.data, dtype=np.float32).reshape(req.shape)
         comp = ActivationCompressor(bits=req.bits)
         q = comp.compress(tensor)
@@ -809,42 +910,42 @@ def create_app(
             "data_hex": q.data.hex(),
             "shape": q.shape,
             "dtype": q.dtype_original,
-            "scale": q.scale,
-            "zero_point": q.zero_point,
-            "compression_ratio": round(q.compression_ratio, 2),
-            "original_bytes": tensor.nbytes,
-            "compressed_bytes": len(q.data) + 8,
+            "scale": float(q.scale),
+            "zero_point": float(q.zero_point),
+            "compression_ratio": round(float(q.compression_ratio), 2),
+            "original_bytes": int(tensor.nbytes),
+            "compressed_bytes": int(len(q.data) + 8),
         }
 
     @app.post("/api/inference/decompress")
-    async def inference_decompress(req: CompressRequest):
+    async def inference_decompress(req: Request):
         """Decompress a previously compressed activation tensor."""
-        if not req.data or not req.shape:
-            raise HTTPException(400, "data and shape required")
-        if not hasattr(req, 'scale') and not hasattr(req, 'data_hex'):
-            raise HTTPException(400, "Compressed data fields required")
-        import numpy as np
         from netai.inference.compress import QuantizedTensor
-        comp = ActivationCompressor(bits=req.bits)
-        data_bytes = bytes.fromhex(req.data_hex if hasattr(req, 'data_hex') else ''.join(chr(int(b)) for b in req.data))
+        body = await req.json()
+        data_hex = body.get("data_hex", "")
+        shape = body.get("shape", [])
+        if not data_hex or not shape:
+            raise HTTPException(400, "data_hex and shape required")
+        comp = ActivationCompressor(bits=body.get("bits", 8))
         result = comp.decompress(QuantizedTensor(
-            data=data_bytes, shape=list(req.shape),
-            dtype_original="float32", scale=getattr(req, 'scale', 1.0),
-            zero_point=getattr(req, 'zero_point', 0.0), compression_ratio=1.0,
+            data=bytes.fromhex(data_hex), shape=list(shape),
+            dtype_original="float32", scale=float(body.get("scale", 1.0)),
+            zero_point=float(body.get("zero_point", 0.0)), compression_ratio=1.0,
         ))
-        return {"shape": list(result.shape), "dtype": str(result.dtype), "data": result.flatten().tolist()[:100]}
+        return {"shape": list(result.shape), "dtype": str(result.dtype),
+                "data": [float(x) for x in result.flatten().tolist()[:100]]}
 
     @app.get("/api/inference/native-stream")
     async def inference_native_stream(req: Request):
         """Stream native token-by-token inference via SSE."""
-        import asyncio
         from fastapi.responses import StreamingResponse
         model_id = req.query_params.get("model_id", "gpt2")
         prompt = req.query_params.get("prompt", "Hello")
-        max_tokens = min(int(req.query_params.get("max_tokens", "32")), 256)
-        temp = float(req.query_params.get("temperature", "0.7"))
+        max_tokens = min(int(req.query_params.get("max_tokens", "32")), 128)
+        temperature = float(req.query_params.get("temperature", "0.7"))
 
         async def token_stream():
+            from netai.inference.native_engine import _layer_norm
             engine = inf_engine.get_native_engine()
             model_dir = os.path.join(ENGINE_CACHE_DIR, "models", model_id)
             tok = get_tokenizer(model_dir) if os.path.isdir(model_dir) else None
@@ -854,44 +955,39 @@ def create_app(
 
             config = engine.configs.get(model_id)
             if config is None:
-                yield f"data: {json.dumps({'type': 'error', 'error': 'Model not loaded'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'error': 'Model {model_id} not loaded'})}\n\n"
                 return
 
-            yield f"data: {json.dumps({'type': 'start', 'model_id': model_id})}\n\n"
-
-            import numpy as np
             embed = engine.embed_tokens.get(model_id)
             output_w = engine.output_proj.get(model_id)
-            ln_f = engine.layer_norm_f.get(model_id)
+            ln_f_pair = engine.layer_norm_f.get(model_id)
             tokens = list(prompt_tokens)
             t0 = time.time()
+
+            yield f"data: {json.dumps({'type': 'start', 'model_id': model_id, 'prompt': prompt})}\n\n"
+            await asyncio.sleep(0.001)
 
             for step in range(max_tokens):
                 input_ids = np.array(tokens, dtype=np.int64).reshape(1, -1)
                 hidden = embed[input_ids]
                 for i in range(config.num_layers):
                     hidden = engine.forward_layer(hidden, model_id, i)
-                if ln_f:
-                    hidden = engine._layer_norm_func(hidden[:, -1, :], ln_f[0], ln_f[1], config.layer_norm_eps)
-                else:
-                    hidden = hidden[:, -1, :]
-                logits = hidden @ (output_w.T if output_w is not None else embed.T)
-                logits = logits / max(temp, 0.01)
+                last_hidden = hidden[:, -1, :]
+                if ln_f_pair is not None:
+                    last_hidden = _layer_norm(last_hidden, ln_f_pair[0], ln_f_pair[1], config.layer_norm_eps)
+                logits = last_hidden @ (output_w.T if output_w is not None else embed.T)
+                logits = logits / max(temperature, 0.01)
                 probs = engine._sample_logits(logits, 50, 0.9)
                 next_token = int(np.random.choice(len(probs), p=probs))
                 tokens.append(next_token)
 
                 word = tok.decode([next_token]) if tok else str(next_token)
                 yield f"data: {json.dumps({'type': 'token', 'token_id': next_token, 'text': word, 'index': step})}\n\n"
-                await asyncio.sleep(0.001)
 
             elapsed = (time.time() - t0) * 1000
-            if tok:
-                full_text = tok.decode(tokens)
-                gen_text = full_text[len(tok.decode(prompt_tokens)):] if tok.decode(prompt_tokens) and full_text.startswith(tok.decode(prompt_tokens)) else full_text
-            else:
-                gen_text = " ".join(str(t) for t in tokens[len(prompt_tokens):])
-            yield f"data: {json.dumps({'type': 'done', 'text': gen_text, 'tokens_generated': len(tokens) - len(prompt_tokens), 'latency_ms': round(elapsed, 1), 'tokens_per_second': round((len(tokens) - len(prompt_tokens)) / max(elapsed / 1000, 0.001), 1)})}\n\n"
+            all_text = tok.decode(tokens) if tok else " ".join(str(t) for t in tokens)
+            gen_count = len(tokens) - len(prompt_tokens)
+            yield f"data: {json.dumps({'type': 'done', 'text': all_text, 'tokens_generated': gen_count, 'latency_ms': round(elapsed, 1), 'tokens_per_second': round(gen_count / max(elapsed / 1000, 0.001), 1)})}\n\n"
 
         return StreamingResponse(token_stream(), media_type="text/event-stream")
 
@@ -1289,6 +1385,126 @@ def create_app(
         except Exception as e:
             logger.warning("WebSocket inference error: %s", e)
 
+    @app.websocket("/ws/inference/stream-native")
+    async def websocket_native_stream(websocket: WebSocket):
+        """WebSocket token-by-token streaming via NativeInferenceEngine.
+
+        Accepts JSON: {model_id, prompt, max_tokens, temperature, top_p}
+        Streams: {type: "token"/"done"/"error", text, token_id, ...}
+        Supports {"type": "cancel"} to abort generation.
+        """
+        await websocket.accept()
+        from netai.inference.native_engine import _layer_norm
+        engine = inf_engine.get_native_engine()
+        cancel_event = asyncio.Event()
+
+        try:
+            data = await websocket.receive_json()
+            model_id = str(data.get("model_id", ""))
+            prompt = str(data.get("prompt", ""))
+            max_tokens = min(int(data.get("max_tokens", 64)), 4096)
+            temperature = float(data.get("temperature", 0.7))
+            top_p = float(data.get("top_p", 0.9))
+        except (WebSocketDisconnect, ValueError, TypeError) as e:
+            try:
+                await websocket.send_json({"type": "error", "error": f"Invalid request: {e}"})
+            except Exception:
+                pass
+            return
+
+        config = engine.configs.get(model_id)
+        if config is None:
+            await websocket.send_json({"type": "error", "error": f"Model {model_id} not loaded"})
+            return
+
+        model_dir = os.path.join(ENGINE_CACHE_DIR, "models", model_id)
+        tok = get_tokenizer(model_dir) if os.path.isdir(model_dir) else None
+        prompt_tokens = tok.encode(prompt) if tok else [ord(c) % config.vocab_size for c in prompt]
+        if not prompt_tokens:
+            prompt_tokens = [0]
+
+        embed = engine.embed_tokens.get(model_id)
+        output_w = engine.output_proj.get(model_id)
+        ln_f_pair = engine.layer_norm_f.get(model_id)
+        tokens = list(prompt_tokens)
+        t0 = time.time()
+
+        await websocket.send_json({
+            "type": "start",
+            "model_id": model_id,
+            "prompt": prompt,
+            "prompt_tokens": len(prompt_tokens),
+        })
+
+        cancelled = False
+        try:
+            for step in range(max_tokens):
+                try:
+                    pending = await asyncio.wait_for(
+                        websocket.receive_text(), timeout=0.001
+                    )
+                    try:
+                        msg = json.loads(pending)
+                        if msg.get("type") == "cancel":
+                            cancelled = True
+                            await websocket.send_json({
+                                "type": "cancelled",
+                                "tokens_generated": step,
+                                "text": tok.decode(tokens) if tok else " ".join(str(t) for t in tokens),
+                            })
+                            break
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                except (asyncio.TimeoutError, WebSocketDisconnect):
+                    pass
+
+                if cancel_event.is_set():
+                    cancelled = True
+                    break
+
+                input_ids = np.array(tokens, dtype=np.int64).reshape(1, -1)
+                hidden = embed[input_ids]
+                for i in range(config.num_layers):
+                    hidden = engine.forward_layer(hidden, model_id, i)
+                last_hidden = hidden[:, -1, :]
+                if ln_f_pair is not None:
+                    last_hidden = _layer_norm(last_hidden, ln_f_pair[0], ln_f_pair[1], config.layer_norm_eps)
+                logits = last_hidden @ (output_w.T if output_w is not None else embed.T)
+                logits = logits / max(temperature, 0.01)
+                probs = engine._sample_logits(logits, 50, top_p)
+                next_token = int(np.random.choice(len(probs), p=probs))
+                tokens.append(next_token)
+
+                word = tok.decode([next_token]) if tok else str(next_token)
+                await websocket.send_json({
+                    "type": "token",
+                    "token_id": next_token,
+                    "text": word,
+                    "index": step,
+                })
+
+            elapsed = (time.time() - t0) * 1000
+            all_text = tok.decode(tokens) if tok else " ".join(str(t) for t in tokens)
+            gen_count = len(tokens) - len(prompt_tokens)
+
+            if not cancelled:
+                await websocket.send_json({
+                    "type": "done",
+                    "text": all_text,
+                    "tokens_generated": gen_count,
+                    "latency_ms": round(elapsed, 1),
+                    "tokens_per_second": round(gen_count / max(elapsed / 1000, 0.001), 1),
+                })
+
+        except WebSocketDisconnect:
+            logger.info("WebSocket client disconnected during native stream")
+        except Exception as e:
+            logger.error("Native WebSocket stream error: %s", e)
+            try:
+                await websocket.send_json({"type": "error", "error": str(e)})
+            except Exception:
+                pass
+
     @app.get("/api/inference/stream")
     async def sse_inference_stream(
         model_id: str = Query(...),
@@ -1389,6 +1605,127 @@ def create_app(
     async def add_gradient_peer(node_id: str = Query(...), endpoint: str = Query(...), identity=Depends(AuthDependency(sec, required_scope=Scope.GRADIENT.value))):
         grad_sync.add_peer(node_id, endpoint)
         return {"status": "ok", "node_id": node_id, "endpoint": endpoint}
+
+    # ── Cache Management Endpoints ──────────────────────────────────────────
+    cache_manager = ModelCacheManager(downloader=inf_engine.get_model_downloader())
+
+    @app.get("/api/cache/models")
+    async def cache_list_models():
+        return {"models": cache_manager.list_models()}
+
+    @app.get("/api/cache/models/{model_id}")
+    async def cache_model_info(model_id: str):
+        info = cache_manager.get_model_info(model_id)
+        if info is None:
+            raise HTTPException(404, f"Model '{model_id}' not found in cache")
+        return info
+
+    @app.delete("/api/cache/models/{model_id}")
+    async def cache_delete_model(model_id: str, identity=Depends(AuthDependency(sec, required_scope=Scope.WRITE.value))):
+        result = cache_manager.delete_model(model_id)
+        if result.get("status") == "not_found":
+            raise HTTPException(404, f"Model '{model_id}' not found in cache")
+        return result
+
+    @app.post("/api/cache/prune")
+    async def cache_prune(keep_latest_n: int = Query(5, ge=1, le=100), identity=Depends(AuthDependency(sec, required_scope=Scope.WRITE.value))):
+        result = cache_manager.prune_cache(keep_latest_n)
+        return result
+
+    @app.get("/api/cache/stats", response_model=CacheStatsResponse)
+    async def cache_stats():
+        return cache_manager.cache_stats()
+
+    @app.post("/api/cache/verify/{model_id}")
+    async def cache_verify(model_id: str):
+        result = cache_manager.verify_integrity(model_id)
+        if result.get("status") == "not_found":
+            raise HTTPException(404, f"Model '{model_id}' not found in cache")
+        return result
+
+    @app.get("/api/cache/search")
+    async def cache_search(q: str = Query(..., min_length=1)):
+        results = cache_manager.search_models(q)
+        return {"query": q, "count": len(results), "models": results}
+
+    @app.get("/api/cache/export")
+    async def cache_export():
+        return cache_manager.export_model_info()
+
+    @app.post("/api/cache/hit")
+    async def cache_hit(req: CacheHitRequest):
+        result = cache_manager.cache_hit(req.model_id)
+        return result
+
+    @app.post("/api/benchmark/run/{model_id}")
+    async def benchmark_run(model_id: str, config: BenchmarkConfig | None = None):
+        """Run full benchmark suite for a model."""
+        if config is None:
+            config = BenchmarkConfig(model_id=model_id)
+        else:
+            config.model_id = model_id
+        result = benchmark.run_suite(model_id, config)
+        if result.error:
+            return {"status": "error", "model_id": model_id, "error": result.error}
+        return {"status": "ok", "model_id": model_id, "result": result.model_dump()}
+
+    @app.get("/api/benchmark/report/{model_id}")
+    async def benchmark_report(model_id: str):
+        """Get Markdown benchmark report for a model."""
+        if model_id not in benchmark.results:
+            result = benchmark.run_suite(model_id)
+            if result.error:
+                raise HTTPException(500, f"Benchmark failed: {result.error}")
+        report = benchmark.generate_report(model_id)
+        return {"model_id": model_id, "report": report}
+
+    @app.get("/api/benchmark/compare")
+    async def benchmark_compare(models: str = Query(default="")):
+        """Compare models side-by-side. Pass comma-separated model IDs."""
+        if not models:
+            raise HTTPException(400, "models query parameter required (comma-separated)")
+        model_ids = [m.strip() for m in models.split(",") if m.strip()]
+        if not model_ids:
+            raise HTTPException(400, "No valid model IDs")
+        comparison = benchmark.compare_models(model_ids)
+        return {"comparison": comparison}
+
+    @app.get("/api/benchmark/stats")
+    async def benchmark_stats():
+        """Get cache statistics: total size, model count, hit rate, disk free."""
+        cache_models_dir = os.path.join(ENGINE_CACHE_DIR, "models")
+        total_size = 0.0
+        model_count = 0
+        if os.path.isdir(cache_models_dir):
+            for entry in os.listdir(cache_models_dir):
+                entry_path = os.path.join(cache_models_dir, entry)
+                if os.path.isdir(entry_path):
+                    model_count += 1
+                    for dirpath, _dirs, filenames in os.walk(entry_path):
+                        for fname in filenames:
+                            fpath = os.path.join(dirpath, fname)
+                            try:
+                                total_size += os.path.getsize(fpath)
+                            except OSError:
+                                pass
+
+        disk_free = 0.0
+        try:
+            statvfs = os.statvfs(ENGINE_CACHE_DIR)
+            disk_free = (statvfs.f_frsize * statvfs.f_bavail) / (1024 ** 3)
+        except (OSError, AttributeError):
+            pass
+
+        return {
+            "cache_dir": ENGINE_CACHE_DIR,
+            "total_size_mb": round(total_size / (1024 * 1024), 2),
+            "model_count": model_count,
+            "disk_free_gb": round(disk_free, 2),
+        }
+
+    @app.get("/api/ws/test", response_class=HTMLResponse)
+    async def websocket_test_page():
+        return _ws_test_html()
 
     return app
 
@@ -1819,6 +2156,153 @@ async function loadNetwork() {
 
 loadOverview();
 loadModels();
+</script>
+</body>
+</html>"""
+
+
+def _ws_test_html() -> str:
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NetAI WebSocket Test</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh;padding:32px}
+h1{color:#58a6ff;font-size:24px;margin-bottom:8px}
+.subtitle{color:#8b949e;font-size:13px;margin-bottom:24px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:20px;margin-bottom:16px;max-width:800px}
+.card h3{color:#58a6ff;font-size:15px;margin-bottom:12px}
+.form-group{margin-bottom:12px}
+.form-group label{display:block;font-size:11px;color:#8b949e;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+.form-group input,.form-group textarea{width:100%;padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e0e0e0;font-size:14px;font-family:inherit}
+.form-group input:focus,.form-group textarea:focus{outline:none;border-color:#58a6ff;box-shadow:0 0 0 1px #1f6feb33}
+.form-row{display:flex;gap:12px;flex-wrap:wrap}
+.form-row .form-group{flex:1;min-width:140px}
+.btn{padding:8px 16px;border:1px solid #30363d;background:#21262d;color:#c9d1d9;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;margin-right:8px}
+.btn:hover{background:#30363d;border-color:#58a6ff;color:#fff}
+.btn-primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.btn-primary:hover{background:#388bfd}
+.btn-danger{background:#da3633;border-color:#da3633;color:#fff;margin-top:12px}
+.output-box{margin-top:12px;padding:16px;background:#0d1117;border:1px solid #21262d;border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:13px;white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto;color:#7ee787;min-height:80px}
+.connected{color:#7ee787;font-weight:600}
+.disconnected{color:#f85149;font-weight:600}
+.status-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:13px}
+</style>
+</head>
+<body>
+<h1>WebSocket Native Streaming Test</h1>
+<p class="subtitle">Test token-by-token streaming via WebSocket NativeInferenceEngine</p>
+
+<div class="card">
+  <h3>Connection</h3>
+  <div class="status-bar">
+    <span>Status: </span>
+    <span id="conn-status" class="disconnected">Not Connected</span>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Model ID</label><input id="model-id" value="gpt2"></div>
+  </div>
+  <button class="btn btn-primary" onclick="connect()">Connect</button>
+  <button class="btn" onclick="disconnectWS()">Disconnect</button>
+</div>
+
+<div class="card">
+  <h3>Inference</h3>
+  <div class="form-row">
+    <div class="form-group"><label>Prompt</label><textarea id="prompt" rows="3">The meaning of life is</textarea></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Max Tokens</label><input id="max-tokens" type="number" value="32" min="1" max="128"></div>
+    <div class="form-group"><label>Temperature</label><input id="temperature" type="number" value="0.7" min="0" max="2" step="0.1"></div>
+    <div class="form-group"><label>Top-P</label><input id="top-p" type="number" value="0.9" min="0" max="1" step="0.05"></div>
+  </div>
+  <button class="btn btn-primary" onclick="sendInference()" id="send-btn" disabled>Send</button>
+  <button class="btn btn-danger" onclick="sendCancel()" id="cancel-btn" disabled>Cancel</button>
+  <div class="output-box" id="output"></div>
+</div>
+
+<script>
+let ws = null;
+let streaming = false;
+
+function connect() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    disconnectWS();
+  }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = proto + '//' + location.host + '/ws/inference/stream-native';
+  ws = new WebSocket(url);
+  
+  ws.onopen = () => {
+    document.getElementById('conn-status').textContent = 'Connected';
+    document.getElementById('conn-status').className = 'connected';
+    document.getElementById('send-btn').disabled = false;
+  };
+  
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    const out = document.getElementById('output');
+    if (data.type === 'start') {
+      out.textContent = '';
+      document.getElementById('cancel-btn').disabled = false;
+      streaming = true;
+    } else if (data.type === 'token') {
+      out.textContent += data.text;
+    } else if (data.type === 'done') {
+      out.textContent += '\\n\\n---\\nGenerated ' + data.tokens_generated + ' tokens in ' + data.latency_ms + 'ms (' + data.tokens_per_second + ' tok/s)';
+      document.getElementById('cancel-btn').disabled = true;
+      streaming = false;
+    } else if (data.type === 'cancelled') {
+      out.textContent += '\\n\\n[CANCELLED at ' + data.tokens_generated + ' tokens]';
+      document.getElementById('cancel-btn').disabled = true;
+      streaming = false;
+    } else if (data.type === 'error') {
+      out.textContent = 'ERROR: ' + data.error;
+      document.getElementById('cancel-btn').disabled = true;
+      streaming = false;
+    }
+  };
+  
+  ws.onclose = () => {
+    document.getElementById('conn-status').textContent = 'Disconnected';
+    document.getElementById('conn-status').className = 'disconnected';
+    document.getElementById('send-btn').disabled = true;
+    document.getElementById('cancel-btn').disabled = true;
+    streaming = false;
+    ws = null;
+  };
+  
+  ws.onerror = () => {
+    document.getElementById('output').textContent = 'WebSocket connection error';
+  };
+}
+
+function disconnectWS() {
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+}
+
+function sendInference() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const msg = {
+    model_id: document.getElementById('model-id').value,
+    prompt: document.getElementById('prompt').value,
+    max_tokens: parseInt(document.getElementById('max-tokens').value) || 32,
+    temperature: parseFloat(document.getElementById('temperature').value) || 0.7,
+    top_p: parseFloat(document.getElementById('top-p').value) || 0.9,
+  };
+  ws.send(JSON.stringify(msg));
+}
+
+function sendCancel() {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !streaming) return;
+  ws.send(JSON.stringify({type: 'cancel'}));
+}
 </script>
 </body>
 </html>"""
