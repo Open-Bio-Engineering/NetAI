@@ -41,6 +41,7 @@ from netai.inference.native_engine import NativeInferenceEngine, TransformerConf
 from netai.inference.pipeline_executor import PipelineExecutor
 from netai.inference.downloader import ModelDownloader
 from netai.inference.tokenizer import get_tokenizer
+from netai.inference.compress import quantize_activation, dequantize_activation, ActivationCompressor
 from netai.training.engine import GradientSyncServer
 from netai.security import (
     SecurityMiddleware, AuthDependency, Scope, UserRole, InputValidator,
@@ -149,6 +150,13 @@ class DecodeRequest(BaseModel):
     model_id: str = ""
     token_ids: list[int] = Field(default_factory=list)
     skip_special_tokens: bool = True
+
+
+class CompressRequest(BaseModel):
+    data: list[float] = Field(default_factory=list)
+    shape: list[int] = Field(default_factory=list)
+    bits: int = Field(8, ge=4, le=8)
+    model_id: str = ""
 
 
 class ModelLoadRequest(BaseModel):
@@ -787,6 +795,105 @@ def create_app(
     async def inference_download_status():
         downloader = inf_engine.get_model_downloader()
         return {"active_downloads": downloader.get_download_status()}
+
+    @app.post("/api/inference/compress")
+    async def inference_compress(req: CompressRequest):
+        """Compress activation tensor using 8-bit quantization for pipeline transfer."""
+        if not req.data or not req.shape:
+            raise HTTPException(400, "data and shape required")
+        import numpy as np
+        tensor = np.array(req.data, dtype=np.float32).reshape(req.shape)
+        comp = ActivationCompressor(bits=req.bits)
+        q = comp.compress(tensor)
+        return {
+            "data_hex": q.data.hex(),
+            "shape": q.shape,
+            "dtype": q.dtype_original,
+            "scale": q.scale,
+            "zero_point": q.zero_point,
+            "compression_ratio": round(q.compression_ratio, 2),
+            "original_bytes": tensor.nbytes,
+            "compressed_bytes": len(q.data) + 8,
+        }
+
+    @app.post("/api/inference/decompress")
+    async def inference_decompress(req: CompressRequest):
+        """Decompress a previously compressed activation tensor."""
+        if not req.data or not req.shape:
+            raise HTTPException(400, "data and shape required")
+        if not hasattr(req, 'scale') and not hasattr(req, 'data_hex'):
+            raise HTTPException(400, "Compressed data fields required")
+        import numpy as np
+        from netai.inference.compress import QuantizedTensor
+        comp = ActivationCompressor(bits=req.bits)
+        data_bytes = bytes.fromhex(req.data_hex if hasattr(req, 'data_hex') else ''.join(chr(int(b)) for b in req.data))
+        result = comp.decompress(QuantizedTensor(
+            data=data_bytes, shape=list(req.shape),
+            dtype_original="float32", scale=getattr(req, 'scale', 1.0),
+            zero_point=getattr(req, 'zero_point', 0.0), compression_ratio=1.0,
+        ))
+        return {"shape": list(result.shape), "dtype": str(result.dtype), "data": result.flatten().tolist()[:100]}
+
+    @app.get("/api/inference/native-stream")
+    async def inference_native_stream(req: Request):
+        """Stream native token-by-token inference via SSE."""
+        import asyncio
+        from fastapi.responses import StreamingResponse
+        model_id = req.query_params.get("model_id", "gpt2")
+        prompt = req.query_params.get("prompt", "Hello")
+        max_tokens = min(int(req.query_params.get("max_tokens", "32")), 256)
+        temp = float(req.query_params.get("temperature", "0.7"))
+
+        async def token_stream():
+            engine = inf_engine.get_native_engine()
+            model_dir = os.path.join(ENGINE_CACHE_DIR, "models", model_id)
+            tok = get_tokenizer(model_dir) if os.path.isdir(model_dir) else None
+            prompt_tokens = tok.encode(prompt) if tok else [ord(c) % 50257 for c in prompt]
+            if not prompt_tokens:
+                prompt_tokens = [0]
+
+            config = engine.configs.get(model_id)
+            if config is None:
+                yield f"data: {json.dumps({'type': 'error', 'error': 'Model not loaded'})}\n\n"
+                return
+
+            yield f"data: {json.dumps({'type': 'start', 'model_id': model_id})}\n\n"
+
+            import numpy as np
+            embed = engine.embed_tokens.get(model_id)
+            output_w = engine.output_proj.get(model_id)
+            ln_f = engine.layer_norm_f.get(model_id)
+            tokens = list(prompt_tokens)
+            t0 = time.time()
+
+            for step in range(max_tokens):
+                input_ids = np.array(tokens, dtype=np.int64).reshape(1, -1)
+                hidden = embed[input_ids]
+                for i in range(config.num_layers):
+                    hidden = engine.forward_layer(hidden, model_id, i)
+                if ln_f:
+                    hidden = engine._layer_norm_func(hidden[:, -1, :], ln_f[0], ln_f[1], config.layer_norm_eps)
+                else:
+                    hidden = hidden[:, -1, :]
+                logits = hidden @ (output_w.T if output_w is not None else embed.T)
+                logits = logits / max(temp, 0.01)
+                probs = engine._sample_logits(logits, 50, 0.9)
+                next_token = int(np.random.choice(len(probs), p=probs))
+                tokens.append(next_token)
+
+                word = tok.decode([next_token]) if tok else str(next_token)
+                yield f"data: {json.dumps({'type': 'token', 'token_id': next_token, 'text': word, 'index': step})}\n\n"
+                await asyncio.sleep(0.001)
+
+            elapsed = (time.time() - t0) * 1000
+            if tok:
+                full_text = tok.decode(tokens)
+                gen_text = full_text[len(tok.decode(prompt_tokens)):] if tok.decode(prompt_tokens) and full_text.startswith(tok.decode(prompt_tokens)) else full_text
+            else:
+                gen_text = " ".join(str(t) for t in tokens[len(prompt_tokens):])
+            yield f"data: {json.dumps({'type': 'done', 'text': gen_text, 'tokens_generated': len(tokens) - len(prompt_tokens), 'latency_ms': round(elapsed, 1), 'tokens_per_second': round((len(tokens) - len(prompt_tokens)) / max(elapsed / 1000, 0.001), 1)})}\n\n"
+
+        return StreamingResponse(token_stream(), media_type="text/event-stream")
 
     @app.get("/api/models/catalog")
     async def models_catalog(size_class: str | None = None, min_vram: float | None = None):
