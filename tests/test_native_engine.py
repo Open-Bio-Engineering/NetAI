@@ -330,7 +330,7 @@ class TestPipelineExecutor:
         assert len(result.generated_tokens) == 3
 
     def test_generate_autoregressive_no_model(self):
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             self.executor.generate_autoregressive("nonexistent", [0, 1], max_tokens=5)
         )
         assert "error" in result.model_dump()
@@ -493,7 +493,7 @@ class TestInferenceEngineIntegration:
         async def _test():
             result = await engine.native_infer("nonexistent", [0, 1])
             assert "error" in result
-        asyncio.get_event_loop().run_until_complete(_test())
+        asyncio.run(_test())
 
 
 class TestDownloadProgress:
@@ -594,7 +594,7 @@ class TestEndToEndNativeGeneration:
             stages = executor.plan_pipeline("tiny-gpt2", config, nodes)
             assert len(stages) >= 1
 
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 executor.generate_autoregressive(
                     model_id="tiny-gpt2",
                     prompt_tokens=[1, 2, 3],

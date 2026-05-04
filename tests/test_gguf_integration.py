@@ -692,7 +692,7 @@ class TestGGUFIntegration:
                 )
 
             import asyncio
-            infer_result = asyncio.get_event_loop().run_until_complete(_do_infer())
+            infer_result = asyncio.run(_do_infer())
             assert "tokens" in infer_result
             assert infer_result["num_generated"] == 5
 
