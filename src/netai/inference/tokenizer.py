@@ -39,6 +39,7 @@ class NativeBPEEncoder:
         self._vocab: dict[str, int] = {}
         self._vocab_rev: dict[int, str] = {}
         self._merges: list[tuple[str, str]] = []
+        self._merge_ranks: dict[tuple[str, str], int] = {}
         self._byte_encoder: dict[int, str] = {}
         self._byte_decoder: dict[str, int] = {}
         self._cache_dir: str = ""
@@ -93,8 +94,8 @@ class NativeBPEEncoder:
             return token
 
         while True:
-            bigram = min(pairs, key=lambda p: self._merges.index(p) if p in self._merges else 1e9)
-            if bigram not in self._merges:
+            bigram = min(pairs, key=lambda p: self._merge_ranks.get(p, float('inf')))
+            if bigram not in self._merge_ranks:
                 break
 
             first, second = bigram
@@ -165,10 +166,12 @@ class NativeBPEEncoder:
 
             merges_raw = model.get("merges", [])
             self._merges = []
-            for m in merges_raw:
+            for rank, m in enumerate(merges_raw):
                 parts = m.split()
                 if len(parts) == 2:
-                    self._merges.append((parts[0], parts[1]))
+                    pair = (parts[0], parts[1])
+                    self._merges.append(pair)
+                    self._merge_ranks[pair] = rank
 
             # Special tokens
             for at in data.get("added_tokens", []):

@@ -40,6 +40,7 @@ from netai.inference.autoloader import AutoLoader, ModelEntry, ModelRegistry, Mo
 from netai.inference.native_engine import NativeInferenceEngine, TransformerConfig
 from netai.inference.pipeline_executor import PipelineExecutor
 from netai.inference.downloader import ModelDownloader
+from netai.inference.tokenizer import get_tokenizer
 from netai.training.engine import GradientSyncServer
 from netai.security import (
     SecurityMiddleware, AuthDependency, Scope, UserRole, InputValidator,
@@ -136,6 +137,18 @@ class InferenceRunRequest(BaseModel):
     group_id: str = ""
     priority: int = 0
     timeout_ms: int = 30000
+
+
+class TokenizeRequest(BaseModel):
+    model_id: str = ""
+    text: str = ""
+    with_special: bool = False
+
+
+class DecodeRequest(BaseModel):
+    model_id: str = ""
+    token_ids: list[int] = Field(default_factory=list)
+    skip_special_tokens: bool = True
 
 
 class ModelLoadRequest(BaseModel):
@@ -635,7 +648,7 @@ def create_app(
                 "shards": len(replica.shard_ids),
             }
         except Exception as e:
-            return {"error": "Inference gateway error", "request_id": request.request_id}
+            return {"error": "Inference gateway error", "request_id": req.model_id}
 
     @app.post("/api/inference/run")
     async def inference_run(req: InferenceRunRequest, identity=Depends(AuthDependency(sec, required_scope=Scope.INFERENCE.value))):
@@ -695,19 +708,28 @@ def create_app(
     async def inference_load_local(model_dir: str, model_id: str = "", layer_start: int = -1, layer_end: int = -1):
         if not model_id:
             model_id = os.path.basename(model_dir.rstrip("/"))
-        if not os.path.isdir(model_dir):
-            raise HTTPException(400, f"Directory not found: {model_dir}")
-        result = inf_engine.load_local_model(model_id, model_dir, layer_start=layer_start, layer_end=layer_end)
+        normalized = os.path.normpath(os.path.abspath(model_dir))
+        if ".." in model_dir or not os.path.isdir(normalized):
+            raise HTTPException(400, f"Invalid directory path")
+        result = inf_engine.load_local_model(model_id, normalized, layer_start=layer_start, layer_end=layer_end)
         return result
 
     @app.post("/api/inference/native-run")
     async def inference_native_run(req: InferenceRunRequest):
         validator.validate_prompt(req.prompt)
-        prompt_tokens = [ord(c) % inf_engine.get_native_engine().configs.get(req.model_id, TransformerConfig()).vocab_size for c in req.prompt]
+        model_id = req.model_id
+        engine = inf_engine.get_native_engine()
+        model_dir = os.path.join(ENGINE_CACHE_DIR, "models", model_id)
+        tok = get_tokenizer(model_dir) if os.path.isdir(model_dir) else None
+        if tok and req.prompt:
+            prompt_tokens = tok.encode(req.prompt)
+        else:
+            config = engine.configs.get(model_id, TransformerConfig())
+            prompt_tokens = [ord(c) % config.vocab_size for c in req.prompt]
         if not prompt_tokens:
             prompt_tokens = [0]
         result = await inf_engine.native_infer(
-            model_id=req.model_id,
+            model_id=model_id,
             prompt_tokens=prompt_tokens,
             max_tokens=req.max_tokens,
             temperature=req.temperature,

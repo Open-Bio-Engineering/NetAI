@@ -314,6 +314,30 @@ class InferenceEngine:
             return InferenceResponse(request_id=request.request_id, error=str(e))
 
     async def _run_inference(self, request: InferenceRequest) -> InferenceResponse:
+        native = self.get_native_engine()
+        if native and request.model_id in native._loaded_models:
+            prompt_tokens = [ord(c) % native.configs.get(request.model_id, TransformerConfig()).vocab_size for c in request.prompt]
+            if not prompt_tokens:
+                prompt_tokens = [0]
+            result = native.generate(
+                model_id=request.model_id,
+                prompt_tokens=prompt_tokens,
+                max_tokens=min(request.max_tokens, 1024),
+                temperature=request.temperature,
+                top_p=request.top_p,
+            )
+            if "error" in result:
+                return InferenceResponse(request_id=request.request_id, error=result["error"])
+            return InferenceResponse(
+                request_id=request.request_id,
+                model_id=request.model_id,
+                outputs=result.get("generated_tokens", []),
+                text=result.get("text", ""),
+                tokens_generated=result.get("num_generated", 0),
+                finish_reason="stop",
+                usage={"prompt_tokens": len(prompt_tokens), "completion_tokens": result.get("num_generated", 0),
+                       "total_tokens": len(prompt_tokens) + result.get("num_generated", 0)},
+            )
         await asyncio.sleep(0.001)
         rng = np.random.default_rng(hash(request.prompt) % (2**31))
         num_tokens = min(request.max_tokens, rng.integers(10, 50))
@@ -336,18 +360,50 @@ class InferenceEngine:
             yield {"type": "error", "error": "Engine not running"}
             return
         model_id = request.model_id
+
         if model_id not in self._model_weights:
             yield {"type": "error", "error": f"Model {model_id} not loaded"}
             return
 
+        native = self.get_native_engine()
+        if native and model_id in native._loaded_models:
+            yield {"type": "start", "request_id": request.request_id, "model_id": model_id, "node_id": self.node_id}
+            prompt_tokens = [ord(c) % native.configs.get(model_id, TransformerConfig()).vocab_size for c in request.prompt]
+            if not prompt_tokens:
+                prompt_tokens = [0]
+            t0 = time.time()
+            result = native.generate(
+                model_id=model_id,
+                prompt_tokens=prompt_tokens,
+                max_tokens=min(request.max_tokens, 1024),
+                temperature=request.temperature,
+                top_p=request.top_p,
+            )
+            if "error" in result:
+                yield {"type": "error", "error": result["error"], "request_id": request.request_id}
+                return
+            generated_tokens = result.get("generated_tokens", [])
+            tok = native._tokenizers.get(model_id)
+            for i, tid in enumerate(generated_tokens):
+                word = tok.decode([tid]) if tok else str(tid)
+                yield {"type": "token", "token_id": tid, "text": word, "index": i, "request_id": request.request_id}
+            elapsed_ms = (time.time() - t0) * 1000
+            yield {"type": "done", "request_id": request.request_id,
+                   "text": result.get("text", ""), "tokens_generated": len(generated_tokens),
+                   "latency_ms": round(elapsed_ms, 2),
+                   "tokens_per_second": round(len(generated_tokens) / max(elapsed_ms / 1000, 0.001), 2),
+                   "finish_reason": "stop",
+                   "usage": {"prompt_tokens": len(prompt_tokens), "completion_tokens": len(generated_tokens),
+                            "total_tokens": len(prompt_tokens) + len(generated_tokens)}}
+            return
+
         t0 = time.time()
+        request_id = request.request_id
 
         rng = np.random.default_rng(int(hashlib.sha256(request.request_id.encode()).hexdigest()[:8], 16))
         num_tokens = min(request.max_tokens, rng.integers(10, 50))
         words = ["the", "model", "predicts", "this", "output", "based", "on",
                  "input", "data", "distributed", "across", "nodes"]
-
-        request_id = request.request_id
 
         try:
             yield {

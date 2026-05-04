@@ -353,6 +353,8 @@ class ModelDownloader:
             with open(path, "rb") as f:
                 while chunk := f.read(self.chunk_size):
                     sha256.update(chunk)
+            if len(expected_sha256) >= 64:
+                return sha256.hexdigest() == expected_sha256
             return sha256.hexdigest().startswith(expected_sha256)
         except Exception:
             return False

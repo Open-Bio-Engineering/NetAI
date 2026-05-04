@@ -453,6 +453,7 @@ class NativeInferenceEngine:
         o_bias = weights.get("attn.c_proj.bias", weights.get("self_attn.o_proj.bias", None))
 
         if q_proj is None:
+            logger.error("Missing attention weights for layer %d — model weights not loaded properly", layer_idx)
             rng = np.random.default_rng(42 + layer_idx)
             q_proj = rng.standard_normal((config.hidden_size, config.hidden_size)).astype(np.float32) * 0.02
             k_proj = rng.standard_normal((config.hidden_size, config.hidden_size)).astype(np.float32) * 0.02
@@ -517,8 +518,9 @@ class NativeInferenceEngine:
             act_fn = _silu
 
         if up_w is None:
-            rng = np.random.default_rng(42)
+            logger.error("Missing FFN weights — model weights not loaded properly")
             inter = config.intermediate_size or 4 * config.hidden_size
+            rng = np.random.default_rng(42)
             up_w = rng.standard_normal((config.hidden_size, inter)).astype(np.float32) * 0.02
             down_w = rng.standard_normal((inter, config.hidden_size)).astype(np.float32) * 0.02
             up_b = np.zeros(inter, dtype=np.float32)

@@ -160,15 +160,15 @@ class PipelineExecutor:
         request_id: str = "",
     ) -> tuple[np.ndarray, LayerResult]:
         """Run a pipeline stage locally through the NativeInferenceEngine."""
+        output_hidden = self.local_engine.forward(
+            hidden, model_id, stage.layer_start, stage.layer_end
+        )
         result = self.local_engine.forward_segment(
             hidden=hidden,
             model_id=model_id,
             layer_start=stage.layer_start,
             layer_end=stage.layer_end,
             request_id=request_id,
-        )
-        output_hidden = self.local_engine.forward(
-            hidden, model_id, stage.layer_start, stage.layer_end
         )
         return output_hidden, result
 
@@ -184,13 +184,14 @@ class PipelineExecutor:
         import aiohttp
         shape = list(hidden.shape)
         dtype = str(hidden.dtype)
-        data = hidden.tobytes()
+        data = hidden.astype(np.float32).tobytes()
         payload = {
             "request_id": request_id,
             "model_id": model_id,
             "stage_index": stage_index,
             "shape": shape,
             "dtype": dtype,
+            "data_hex": data.hex(),
             "data_size": len(data),
         }
         try:
@@ -204,10 +205,16 @@ class PipelineExecutor:
                     if "error" in result:
                         logger.error("Activation error from %s: %s", target_endpoint, result["error"])
                         return None
+                    result_data_hex = result.get("data_hex")
+                    result_shape = result.get("shape", shape)
+                    result_dtype = result.get("dtype", dtype)
+                    if not result_data_hex:
+                        logger.error("Remote node %s returned no activation data", target_endpoint)
+                        return None
                     return np.frombuffer(
-                        bytes.fromhex(result["data_hex"]),
-                        dtype=np.dtype(result["dtype"])
-                    ).reshape(result["shape"])
+                        bytes.fromhex(result_data_hex),
+                        dtype=np.dtype(result_dtype),
+                    ).reshape(result_shape)
         except Exception as e:
             logger.error("Failed to send activation to %s: %s", target_endpoint, e)
             return None
